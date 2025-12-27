@@ -1,0 +1,5 @@
+{
+  "name": "Mostech Ultimate CRM",
+  "description": "A modern, minimalist CRM for computer stores with decoupled architecture (Django/React) and IIS optimization.",
+  "requestFramePermissions": []
+}
