@@ -1,6 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import App from './App';
+// Ensure App is imported correctly based on your file structure
+// Since this file is in frontend/src/, and App.tsx is in frontend/src/, the path is ./App
+import App from './App'; 
 
 const rootElement = document.getElementById('root');
 if (!rootElement) {

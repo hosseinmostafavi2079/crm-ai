@@ -1,7 +1,7 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 
-// Changed to relative path to use Vite Proxy in development
-// In production (IIS), this works if frontend and backend are on the same domain
+// baseURL is set to /api/ to leverage the Vite proxy defined in vite.config.ts
+// This forwards requests to http://127.0.0.1:8000/api/ avoiding CORS issues
 const API_BASE_URL = '/api/';
 
 const api: AxiosInstance = axios.create({
@@ -13,16 +13,12 @@ const api: AxiosInstance = axios.create({
   },
 });
 
-// Request Interceptor
+// Request Interceptor: Attach Token
 api.interceptors.request.use(
   (config: InternalAxiosRequestConfig) => {
     const token = localStorage.getItem('access_token');
     if (token) {
-      // IIS FIX: Some IIS configurations strip the standard Authorization header.
-      // We use a custom header X-Auth-Token which the Django Middleware will map back.
-      config.headers['X-Auth-Token'] = `Bearer ${token}`;
-      // Standard header as fallback
-      config.headers['Authorization'] = `Bearer ${token}`;
+        config.headers['Authorization'] = `Bearer ${token}`;
     }
     return config;
   },
@@ -31,24 +27,14 @@ api.interceptors.request.use(
   }
 );
 
-// Response Interceptor
+// Response Interceptor: Error Logging
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    const originalRequest = error.config;
-    
-    // Log Network Errors for easier debugging
-    if (error.message === 'Network Error') {
-      console.error('Network Error: Unable to connect to the server. Ensure Backend is running on port 8000.');
+    if (error.response?.status === 401) {
+        // Optional: Redirect to login or refresh token here
+        console.warn('Unauthorized access - Token might be expired');
     }
-
-    // Handle 401 Unauthorized (Token refresh logic would go here)
-    if (error.response?.status === 401 && !originalRequest._retry) {
-      // Clear invalid tokens
-      // localStorage.removeItem('access_token');
-      // window.location.href = '/login';
-    }
-    
     return Promise.reject(error);
   }
 );

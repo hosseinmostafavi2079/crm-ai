@@ -430,8 +430,8 @@ const Customers: React.FC = () => {
 
       {/* Table */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="p-4 border-b border-gray-100">
-           <div className="flex items-center bg-gray-50 rounded-xl px-4 py-2 border border-gray-100 focus-within:ring-2 focus-within:ring-indigo-100 w-full md:w-96">
+        <div className="p-4 border-b border-gray-100 flex flex-col sm:flex-row gap-4 justify-between items-center">
+           <div className="flex items-center bg-gray-50 rounded-xl px-4 py-2 border border-gray-100 focus-within:ring-2 focus-within:ring-indigo-100 w-full sm:w-96">
               <Search size={18} className="text-gray-400 ml-2" />
               <input 
                 type="text" 
@@ -440,6 +440,22 @@ const Customers: React.FC = () => {
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
+           </div>
+           
+           <div className="flex items-center gap-2 w-full sm:w-auto">
+              <div className="flex items-center gap-2 bg-white border border-gray-200 rounded-xl px-3 py-2 hover:border-indigo-200 transition-colors w-full sm:w-auto">
+                  <Filter size={16} className="text-gray-400" />
+                  <select 
+                    value={filterType}
+                    onChange={(e) => setFilterType(e.target.value as any)}
+                    className="bg-transparent border-none outline-none text-sm text-gray-700 font-medium cursor-pointer w-full"
+                  >
+                    <option value="all">همه مشتریان</option>
+                    <option value="buyer">خریداران کالا</option>
+                    <option value="service">مشتریان خدمات</option>
+                    <option value="both">مشتریان وفادار (VIP)</option>
+                  </select>
+              </div>
            </div>
         </div>
 
