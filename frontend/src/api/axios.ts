@@ -1,7 +1,8 @@
 import axios, { AxiosInstance, InternalAxiosRequestConfig } from 'axios';
 
-// Environment variable would be used here in production
-const API_BASE_URL = 'http://localhost:8000/api/';
+// Changed to relative path to use Vite Proxy in development
+// In production (IIS), this works if frontend and backend are on the same domain
+const API_BASE_URL = '/api/';
 
 const api: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
@@ -36,10 +37,16 @@ api.interceptors.response.use(
   async (error) => {
     const originalRequest = error.config;
     
+    // Log Network Errors for easier debugging
+    if (error.message === 'Network Error') {
+      console.error('Network Error: Unable to connect to the server. Ensure Backend is running on port 8000.');
+    }
+
     // Handle 401 Unauthorized (Token refresh logic would go here)
     if (error.response?.status === 401 && !originalRequest._retry) {
-      // Redirect to login or refresh token
-      // window.location.href = '/#/login';
+      // Clear invalid tokens
+      // localStorage.removeItem('access_token');
+      // window.location.href = '/login';
     }
     
     return Promise.reject(error);

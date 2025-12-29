@@ -14,53 +14,42 @@ interface Repair {
   phoneNumber: string;
   deviceModel: string;
   status: 'completed' | 'in_progress' | 'waiting_parts' | 'cancelled';
-  serviceType: 'hardware' | 'software'; // Added to distinguish Hardware Repair vs Software/Windows
+  serviceType: 'hardware' | 'software'; 
   cost: number;
   serviceDate: string;
   warrantyExpiration: string;
+  description?: string;
 }
 
-// Mock Data - Persian Dates
-const MOCK_REPAIRS: Repair[] = [
-  {
-    id: 1,
-    customerName: 'محمد حسینی',
-    phoneNumber: '09121111111',
-    deviceModel: 'MacBook Pro M1',
-    status: 'in_progress',
-    serviceType: 'hardware',
-    cost: 0,
-    serviceDate: '1402/08/15',
-    warrantyExpiration: '1403/08/15'
-  },
-  {
-    id: 2,
-    customerName: 'سارا احمدی',
-    phoneNumber: '09122222222',
-    deviceModel: 'iPhone 13',
-    status: 'completed',
-    serviceType: 'hardware',
-    cost: 4500000,
-    serviceDate: '1402/08/10',
-    warrantyExpiration: '1403/08/10'
-  },
-  {
-    id: 3,
-    customerName: 'امید زند',
-    phoneNumber: '09198887777',
-    deviceModel: 'Lenovo Ideapad',
-    status: 'completed',
-    serviceType: 'software', // Example of software service
-    cost: 350000,
-    serviceDate: '1403/01/20',
-    warrantyExpiration: '1404/01/20'
-  }
-];
+// Helper for Logging
+const logSystemAction = (action: string, details: string, type: 'create' | 'update' | 'delete' | 'renew') => {
+    const logs = JSON.parse(localStorage.getItem('system_logs') || '[]');
+    const date = new DateObject({ calendar: persian, locale: persian_fa }).format("YYYY/MM/DD HH:mm:ss");
+    logs.push({
+        id: Date.now(),
+        action,
+        details,
+        user: 'مدیر سیستم', // In a real app, get from auth context
+        timestamp: date,
+        type
+    });
+    localStorage.setItem('system_logs', JSON.stringify(logs));
+};
 
 const Repairs: React.FC = () => {
-  const [repairs, setRepairs] = useState<Repair[]>(MOCK_REPAIRS);
+  // Load from LocalStorage
+  const [repairs, setRepairs] = useState<Repair[]>(() => {
+      const saved = localStorage.getItem('repair_records');
+      return saved ? JSON.parse(saved) : [];
+  });
+  
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRepair, setEditingRepair] = useState<Repair | null>(null);
+
+  // Save to LocalStorage whenever repairs change
+  useEffect(() => {
+      localStorage.setItem('repair_records', JSON.stringify(repairs));
+  }, [repairs]);
 
   // Form State
   const [formData, setFormData] = useState<{
@@ -72,6 +61,7 @@ const Repairs: React.FC = () => {
     cost: string;
     serviceDate: string;
     warrantyExpiration: string;
+    description: string;
   }>({
     customerName: '',
     phoneNumber: '',
@@ -80,10 +70,10 @@ const Repairs: React.FC = () => {
     serviceType: 'hardware',
     cost: '',
     serviceDate: '',
-    warrantyExpiration: ''
+    warrantyExpiration: '',
+    description: ''
   });
 
-  // Calculate default warranty date (1 year from now using Jalali)
   const calculateWarranty = (dateStr: string) => {
     if (!dateStr) return '';
     try {
@@ -95,9 +85,7 @@ const Repairs: React.FC = () => {
     }
   };
 
-  // Logic: Auto-update Warranty Expiration when Service Date changes
   useEffect(() => {
-    // Only update if warranty isn't manually edited (simplified: always update on service change for now)
     if (formData.serviceDate) {
         const nextYear = calculateWarranty(formData.serviceDate);
         setFormData(prev => ({
@@ -118,15 +106,25 @@ const Repairs: React.FC = () => {
       serviceType: formData.serviceType,
       cost: Number(formData.cost),
       serviceDate: formData.serviceDate,
-      warrantyExpiration: formData.warrantyExpiration
+      warrantyExpiration: formData.warrantyExpiration,
+      description: formData.description
     };
 
     if (editingRepair) {
       setRepairs(repairs.map(r => r.id === newRepair.id ? newRepair : r));
+      logSystemAction('بروزرسانی تعمیر', `ویرایش وضعیت تعمیرات برای ${newRepair.customerName}`, 'update');
     } else {
       setRepairs([newRepair, ...repairs]);
+      logSystemAction('ثبت تعمیر جدید', `پذیرش دستگاه ${newRepair.deviceModel} برای ${newRepair.customerName}`, 'create');
     }
     closeModal();
+  };
+  
+  const handleDelete = (id: number, name: string) => {
+      if(window.confirm('آیا از حذف این رکورد اطمینان دارید؟')) {
+          setRepairs(repairs.filter(r => r.id !== id));
+          logSystemAction('حذف تعمیرات', `حذف سابقه تعمیرات ${name}`, 'delete');
+      }
   };
 
   const openModal = (repair?: Repair) => {
@@ -140,11 +138,11 @@ const Repairs: React.FC = () => {
         serviceType: repair.serviceType,
         cost: String(repair.cost),
         serviceDate: repair.serviceDate,
-        warrantyExpiration: repair.warrantyExpiration
+        warrantyExpiration: repair.warrantyExpiration,
+        description: repair.description || ''
       });
     } else {
       setEditingRepair(null);
-      // Default to today (Persian)
       const today = new DateObject({ calendar: persian, locale: persian_fa }).format();
       setFormData({
         customerName: '',
@@ -154,7 +152,8 @@ const Repairs: React.FC = () => {
         serviceType: 'hardware',
         cost: '',
         serviceDate: today,
-        warrantyExpiration: calculateWarranty(today)
+        warrantyExpiration: calculateWarranty(today),
+        description: ''
       });
     }
     setIsModalOpen(true);
@@ -214,10 +213,6 @@ const Repairs: React.FC = () => {
                 className="bg-transparent border-none outline-none text-sm w-full text-gray-700 placeholder-gray-400"
               />
            </div>
-           <button className="flex items-center gap-2 px-4 py-2 border border-gray-200 rounded-xl text-gray-600 hover:bg-gray-50 transition-colors">
-              <Filter size={18} />
-              <span className="hidden md:inline">فیلترها</span>
-           </button>
         </div>
 
         {/* Table */}
@@ -229,63 +224,68 @@ const Repairs: React.FC = () => {
                 <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">دستگاه / نوع خدمت</th>
                 <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">وضعیت</th>
                 <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">تاریخ خدمات</th>
-                <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">پایان گارانتی</th>
+                <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">توضیحات</th>
                 <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">هزینه (تومان)</th>
                 <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">عملیات</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {repairs.map((repair) => (
-                <tr key={repair.id} className="hover:bg-gray-50/50 transition-colors">
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <div className="flex flex-col">
-                        <span className="text-sm font-medium text-gray-800">{repair.customerName}</span>
-                        <span className="text-xs text-gray-400">{repair.phoneNumber}</span>
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                     <div className="flex flex-col">
-                        <span className="text-sm font-medium text-gray-800 flex items-center gap-2">
-                            {repair.serviceType === 'hardware' ? <Laptop size={14} className="text-indigo-500" /> : <Monitor size={14} className="text-pink-500" />}
-                            {repair.deviceModel}
+              {repairs.length === 0 ? (
+                  <tr>
+                      <td colSpan={7} className="text-center py-10 text-gray-400">
+                          هیچ مورد تعمیراتی ثبت نشده است.
+                      </td>
+                  </tr>
+              ) : (
+                repairs.map((repair) => (
+                    <tr key={repair.id} className="hover:bg-gray-50/50 transition-colors">
+                    <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex flex-col">
+                            <span className="text-sm font-medium text-gray-800">{repair.customerName}</span>
+                            <span className="text-xs text-gray-400">{repair.phoneNumber}</span>
+                        </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                        <div className="flex flex-col">
+                            <span className="text-sm font-medium text-gray-800 flex items-center gap-2">
+                                {repair.serviceType === 'hardware' ? <Laptop size={14} className="text-indigo-500" /> : <Monitor size={14} className="text-pink-500" />}
+                                {repair.deviceModel}
+                            </span>
+                            <span className="text-xs text-gray-400">
+                                {repair.serviceType === 'hardware' ? 'تعمیر سخت‌افزار' : 'نصب ویندوز/نرم‌افزار'}
+                            </span>
+                        </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap">
+                        <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusColor(repair.status)}`}>
+                        {getStatusText(repair.status)}
                         </span>
-                        <span className="text-xs text-gray-400">
-                            {repair.serviceType === 'hardware' ? 'تعمیر سخت‌افزار' : 'نصب ویندوز/نرم‌افزار'}
-                        </span>
-                     </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    <span className={`px-3 py-1 inline-flex text-xs leading-5 font-semibold rounded-full ${getStatusColor(repair.status)}`}>
-                      {getStatusText(repair.status)}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                    <div className="flex items-center gap-2">
-                        <Calendar size={14} className="text-gray-400" />
-                        {repair.serviceDate}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                     <div className="flex items-center gap-2">
-                        <AlertTriangle size={14} className="text-indigo-400" />
-                        {repair.warrantyExpiration}
-                    </div>
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-800">
-                    {repair.cost.toLocaleString()}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    <div className="flex items-center gap-2">
-                        <button onClick={() => openModal(repair)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
-                            <Edit size={16} />
-                        </button>
-                        <button className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
-                            <Trash size={16} />
-                        </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                        <div className="flex items-center gap-2">
+                            <Calendar size={14} className="text-gray-400" />
+                            {repair.serviceDate}
+                        </div>
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap max-w-xs truncate text-xs text-gray-500" title={repair.description}>
+                        {repair.description || '-'}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-800">
+                        {repair.cost.toLocaleString()}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <div className="flex items-center gap-2">
+                            <button onClick={() => openModal(repair)} className="p-1.5 text-blue-600 hover:bg-blue-50 rounded-lg transition-colors">
+                                <Edit size={16} />
+                            </button>
+                            <button onClick={() => handleDelete(repair.id, repair.customerName)} className="p-1.5 text-red-600 hover:bg-red-50 rounded-lg transition-colors">
+                                <Trash size={16} />
+                            </button>
+                        </div>
+                    </td>
+                    </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>
@@ -294,142 +294,159 @@ const Repairs: React.FC = () => {
       {/* Modal */}
       {isModalOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-visible animate-fadeIn">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl overflow-visible animate-fadeIn h-[90vh] flex flex-col">
                 <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
                     <h3 className="text-lg font-bold text-gray-800">
-                        {editingRepair ? 'ویرایش خدمات' : 'پذیرش دستگاه جدید'}
+                        {editingRepair ? 'ویرایش خدمات' : 'پذیرش دستگاه جهت تعمیر'}
                     </h3>
                     <button onClick={closeModal} className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-1 transition-colors">
                         <X size={20} />
                     </button>
                 </div>
                 
-                <form onSubmit={handleSubmit} className="p-6 space-y-6">
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-700">نام مشتری</label>
-                            <input 
-                                required
-                                type="text" 
-                                className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
-                                value={formData.customerName}
-                                onChange={e => setFormData({...formData, customerName: e.target.value})}
-                            />
-                        </div>
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-700">شماره تماس</label>
-                            <input 
-                                required
-                                type="text" 
-                                className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
-                                value={formData.phoneNumber}
-                                onChange={e => setFormData({...formData, phoneNumber: e.target.value})}
-                            />
-                        </div>
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-700">نوع خدمات</label>
-                            <select 
-                                className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
-                                value={formData.serviceType}
-                                onChange={e => setFormData({...formData, serviceType: e.target.value as any})}
-                            >
-                                <option value="hardware">تعمیرات سخت‌افزاری (لپ‌تاپ/موبایل)</option>
-                                <option value="software">خدمات نرم‌افزاری (نصب ویندوز و...)</option>
-                            </select>
-                        </div>
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-700">مدل دستگاه / توضیحات</label>
-                            <input 
-                                required
-                                type="text" 
-                                placeholder="مثال: Asus VivoBook / نصب ویندوز 11"
-                                className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
-                                value={formData.deviceModel}
-                                onChange={e => setFormData({...formData, deviceModel: e.target.value})}
-                            />
-                        </div>
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-700">وضعیت</label>
-                            <select 
-                                className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
-                                value={formData.status}
-                                onChange={e => setFormData({...formData, status: e.target.value as any})}
-                            >
-                                <option value="in_progress">در حال انجام</option>
-                                <option value="waiting_parts">منتظر قطعه</option>
-                                <option value="completed">تکمیل شده</option>
-                                <option value="cancelled">لغو شده</option>
-                            </select>
-                        </div>
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-700">هزینه (تومان)</label>
-                            <input 
-                                type="number" 
-                                className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
-                                value={formData.cost}
-                                onChange={e => setFormData({...formData, cost: e.target.value})}
-                            />
-                        </div>
-                    </div>
-                    
-                    <div className="p-4 bg-indigo-50/50 rounded-xl border border-indigo-100 grid grid-cols-1 md:grid-cols-2 gap-6">
-                         <div className="space-y-2">
-                            <label className="text-sm font-medium text-indigo-900">تاریخ خدمات/شروع (شمسی)</label>
-                            <div className="relative">
-                                <Calendar className="absolute right-3 top-2.5 text-indigo-400 w-5 h-5 pointer-events-none z-10" />
-                                <DatePicker
-                                    calendar={persian}
-                                    locale={persian_fa}
-                                    calendarPosition="top-right"
-                                    value={formData.serviceDate}
-                                    onChange={(dateObject: any) => {
-                                        const str = dateObject?.toString() || "";
-                                        setFormData({...formData, serviceDate: str});
-                                    }}
-                                    inputClass="rmdp-input"
-                                    containerStyle={{ width: "100%" }}
-                                    placeholder="انتخاب تاریخ..."
+                <div className="overflow-y-auto p-6 flex-1">
+                    <form onSubmit={handleSubmit} className="space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-gray-700">نام مشتری</label>
+                                <input 
+                                    required
+                                    type="text" 
+                                    className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
+                                    value={formData.customerName}
+                                    onChange={e => setFormData({...formData, customerName: e.target.value})}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-gray-700">شماره تماس</label>
+                                <input 
+                                    required
+                                    type="text" 
+                                    className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
+                                    value={formData.phoneNumber}
+                                    onChange={e => setFormData({...formData, phoneNumber: e.target.value})}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-gray-700">نوع خدمات</label>
+                                <select 
+                                    className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
+                                    value={formData.serviceType}
+                                    onChange={e => setFormData({...formData, serviceType: e.target.value as any})}
+                                >
+                                    <option value="hardware">تعمیرات سخت‌افزاری (لپ‌تاپ/موبایل)</option>
+                                    <option value="software">خدمات نرم‌افزاری (نصب ویندوز و...)</option>
+                                </select>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-gray-700">مدل دستگاه</label>
+                                <input 
+                                    required
+                                    type="text" 
+                                    placeholder="مثال: Asus VivoBook"
+                                    className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
+                                    value={formData.deviceModel}
+                                    onChange={e => setFormData({...formData, deviceModel: e.target.value})}
+                                />
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-gray-700">وضعیت</label>
+                                <select 
+                                    className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
+                                    value={formData.status}
+                                    onChange={e => setFormData({...formData, status: e.target.value as any})}
+                                >
+                                    <option value="in_progress">در حال انجام</option>
+                                    <option value="waiting_parts">منتظر قطعه</option>
+                                    <option value="completed">تکمیل شده</option>
+                                    <option value="cancelled">لغو شده</option>
+                                </select>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-gray-700">هزینه (تومان)</label>
+                                <input 
+                                    type="number" 
+                                    className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
+                                    value={formData.cost}
+                                    onChange={e => setFormData({...formData, cost: e.target.value})}
                                 />
                             </div>
                         </div>
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-indigo-900">تاریخ پایان گارانتی خدمات (شمسی)</label>
-                            <div className="relative">
-                                <AlertTriangle className="absolute right-3 top-2.5 text-indigo-400 w-5 h-5 pointer-events-none z-10" />
-                                <DatePicker
-                                    calendar={persian}
-                                    locale={persian_fa}
-                                    calendarPosition="top-right"
-                                    value={formData.warrantyExpiration}
-                                    onChange={(dateObject: any) => {
-                                        const str = dateObject?.toString() || "";
-                                        setFormData({...formData, warrantyExpiration: str});
-                                    }}
-                                    inputClass="rmdp-input"
-                                    containerStyle={{ width: "100%" }}
-                                    placeholder="انتخاب تاریخ..."
-                                />
-                            </div>
-                            <p className="text-xs text-indigo-400 mt-1">* به صورت خودکار ۳۶۵ روز بعد از تاریخ خدمات تنظیم می‌شود.</p>
-                        </div>
-                    </div>
 
-                    <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-100">
-                        <button 
-                            type="button" 
-                            onClick={closeModal}
-                            className="px-6 py-2.5 text-gray-600 hover:bg-gray-100 font-medium rounded-xl transition-colors"
-                        >
-                            انصراف
-                        </button>
-                        <button 
-                            type="submit" 
-                            className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 transition-all transform active:scale-95"
-                        >
-                            {editingRepair ? 'ذخیره تغییرات' : 'ثبت اطلاعات'}
-                        </button>
-                    </div>
-                </form>
+                        {/* Description Field */}
+                        <div className="space-y-2">
+                            <label className="text-sm font-medium text-gray-700">توضیحات ایراد / کارهای انجام شده</label>
+                            <textarea 
+                                rows={3}
+                                placeholder="شرح مشکل دستگاه یا جزئیات خدمات..."
+                                className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none resize-none"
+                                value={formData.description}
+                                onChange={e => setFormData({...formData, description: e.target.value})}
+                            />
+                        </div>
+                        
+                        <div className="p-4 bg-indigo-50/50 rounded-xl border border-indigo-100 grid grid-cols-1 md:grid-cols-2 gap-6">
+                             <div className="space-y-2">
+                                <label className="text-sm font-medium text-indigo-900">تاریخ خدمات/شروع (شمسی)</label>
+                                <div className="relative">
+                                    <Calendar className="absolute right-3 top-2.5 text-indigo-400 w-5 h-5 pointer-events-none z-10" />
+                                    <DatePicker
+                                        calendar={persian}
+                                        locale={persian_fa}
+                                        calendarPosition="top-right"
+                                        value={formData.serviceDate}
+                                        onChange={(dateObject: any) => {
+                                            const str = dateObject?.toString() || "";
+                                            setFormData({...formData, serviceDate: str});
+                                        }}
+                                        inputClass="rmdp-input"
+                                        containerStyle={{ width: "100%" }}
+                                        placeholder="انتخاب تاریخ..."
+                                    />
+                                </div>
+                            </div>
+                            <div className="space-y-2">
+                                <label className="text-sm font-medium text-indigo-900">تاریخ پایان گارانتی خدمات (شمسی)</label>
+                                <div className="relative">
+                                    <AlertTriangle className="absolute right-3 top-2.5 text-indigo-400 w-5 h-5 pointer-events-none z-10" />
+                                    <DatePicker
+                                        calendar={persian}
+                                        locale={persian_fa}
+                                        calendarPosition="top-right"
+                                        value={formData.warrantyExpiration}
+                                        onChange={(dateObject: any) => {
+                                            const str = dateObject?.toString() || "";
+                                            setFormData({...formData, warrantyExpiration: str});
+                                        }}
+                                        inputClass="rmdp-input"
+                                        containerStyle={{ width: "100%" }}
+                                        placeholder="انتخاب تاریخ..."
+                                    />
+                                </div>
+                                <p className="text-xs text-indigo-400 mt-1">* به صورت خودکار ۳۶۵ روز بعد از تاریخ خدمات تنظیم می‌شود.</p>
+                            </div>
+                        </div>
+
+                        {/* Hidden submit for Enter key */}
+                        <button type="submit" className="hidden" />
+                    </form>
+                </div>
+
+                <div className="flex items-center justify-end gap-3 p-6 border-t border-gray-100 bg-white rounded-b-2xl">
+                    <button 
+                        type="button" 
+                        onClick={closeModal}
+                        className="px-6 py-2.5 text-gray-600 hover:bg-gray-100 font-medium rounded-xl transition-colors"
+                    >
+                        انصراف
+                    </button>
+                    <button 
+                        onClick={handleSubmit}
+                        className="px-6 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 transition-all transform active:scale-95"
+                    >
+                        {editingRepair ? 'ذخیره تغییرات' : 'ثبت اطلاعات'}
+                    </button>
+                </div>
             </div>
         </div>
       )}

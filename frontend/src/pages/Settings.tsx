@@ -1,12 +1,28 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Save, Server, Smartphone, Shield, Database, 
-  RefreshCw, CheckCircle, Store, BellRing, Key, Users, Plus, Trash2, X
+  RefreshCw, CheckCircle, Store, BellRing, Key, Users, Plus, Trash2, X,
+  FileSpreadsheet, Activity, Download, History, Clock, FileArchive
 } from 'lucide-react';
+import * as XLSX from 'xlsx';
+import JSZip from 'jszip'; // Now available via importmap
+import { DateObject } from "react-multi-date-picker";
+import persian from "react-date-object/calendars/persian";
+import persian_fa from "react-date-object/locales/persian_fa";
+
+interface LogEntry {
+    id: number;
+    action: string;
+    details: string;
+    user: string;
+    timestamp: string;
+    type: 'create' | 'update' | 'delete' | 'renew' | 'login';
+}
 
 const Settings: React.FC = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [showToast, setShowToast] = useState(false);
+  const [toastMsg, setToastMsg] = useState('');
   
   // Admin Management State
   const [isAdminModalOpen, setIsAdminModalOpen] = useState(false);
@@ -16,28 +32,121 @@ const Settings: React.FC = () => {
       { id: 2, name: 'سارا احمدی', phone: '09121111111', role: 'پشتیبان' }
   ]);
 
-  // Mock State
+  // Logs State
+  const [logs, setLogs] = useState<LogEntry[]>([]);
+
+  useEffect(() => {
+      const savedLogs = localStorage.getItem('system_logs');
+      if (savedLogs) setLogs(JSON.parse(savedLogs));
+  }, []);
+
+  // Config State
   const [config, setConfig] = useState({
     storeName: 'آیدی 724',
     managerName: 'علی رضایی',
     phone: '02188889999',
     address: 'تهران، خیابان ولیعصر، پاساژ کامپیوتر',
     autoBackup: true,
-    backupFrequency: 'daily', // daily, weekly
-    smsApiKey: 'a1b2c3d4e5f6g7h8i9j0',
-    smsProvider: 'kavenegar',
-    sendSmsOnRepairComplete: true,
-    sendSmsOnWarrantyWarning: true,
+    backupFrequency: 'daily',
+    autoBackupTime: '23:00' // New: Specific time
   });
+
+  useEffect(() => {
+      const savedConfig = localStorage.getItem('app_config');
+      if(savedConfig) setConfig(JSON.parse(savedConfig));
+  }, []);
+
+  const triggerToast = (msg: string) => {
+      setToastMsg(msg);
+      setShowToast(true);
+      setTimeout(() => setShowToast(false), 3000);
+  };
 
   const handleSave = () => {
     setIsLoading(true);
+    localStorage.setItem('app_config', JSON.stringify(config));
     // Simulate API call
     setTimeout(() => {
       setIsLoading(false);
-      setShowToast(true);
-      setTimeout(() => setShowToast(false), 3000);
+      triggerToast('تنظیمات سیستم با موفقیت ذخیره شد.');
     }, 1500);
+  };
+
+  // --- ZIP BACKUP LOGIC ---
+  const handleFullSystemBackup = async () => {
+      setIsLoading(true);
+      
+      try {
+        const zip = new JSZip();
+        const dateStr = new DateObject({ calendar: persian, locale: persian_fa }).format("YYYY-MM-DD_HH-mm");
+        
+        // Helper to create Excel Buffer
+        const createExcelBuffer = (data: any[], sheetName: string) => {
+            const ws = XLSX.utils.json_to_sheet(data);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, sheetName);
+            return XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        };
+
+        // 1. Customers & Sales (service_records)
+        const salesData = JSON.parse(localStorage.getItem('service_records') || '[]');
+        if (salesData.length > 0) {
+            zip.file("Customers_Sales.xlsx", createExcelBuffer(salesData, "Customers"));
+        }
+
+        // 2. Repairs (repair_records)
+        const repairsData = JSON.parse(localStorage.getItem('repair_records') || '[]');
+        if (repairsData.length > 0) {
+            zip.file("Repairs.xlsx", createExcelBuffer(repairsData, "Repairs"));
+        }
+
+        // 3. SMS Logs
+        const smsLogsData = JSON.parse(localStorage.getItem('sms_logs') || '[]');
+        if (smsLogsData.length > 0) {
+            zip.file("SMS_History_Logs.xlsx", createExcelBuffer(smsLogsData, "SMS Logs"));
+        }
+
+        // 4. System Logs & Renewals
+        const logsData = JSON.parse(localStorage.getItem('system_logs') || '[]');
+        if (logsData.length > 0) {
+            zip.file("System_Audit_Logs.xlsx", createExcelBuffer(logsData, "Audit"));
+            
+            // Extract Renewals specifically
+            const renewals = logsData.filter((l: any) => l.type === 'renew');
+            if (renewals.length > 0) {
+                zip.file("Renewals_Report.xlsx", createExcelBuffer(renewals, "Renewals"));
+            }
+        }
+
+        // 5. Config (JSON)
+        const fullConfig = {
+            appConfig: config,
+            smsConfig: JSON.parse(localStorage.getItem('sms_config') || '{}'),
+            smsTemplates: JSON.parse(localStorage.getItem('sms_templates') || '[]'),
+            backupDate: dateStr
+        };
+        zip.file("System_Config.json", JSON.stringify(fullConfig, null, 2));
+
+        // Generate Zip
+        const content = await zip.generateAsync({ type: "blob" });
+        
+        // Download Trigger
+        const url = window.URL.createObjectURL(content);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `Backup_${config.storeName.replace(/\s+/g, '_')}_${dateStr}.zip`;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+
+        triggerToast('فایل بکاپ جامع (ZIP) ایجاد و دانلود شد.');
+      } catch (error) {
+        console.error(error);
+        triggerToast('خطا در ایجاد بکاپ.');
+      } finally {
+        setIsLoading(false);
+      }
   };
 
   const handleAddAdmin = () => {
@@ -63,31 +172,50 @@ const Settings: React.FC = () => {
     </button>
   );
 
+  const getActionColor = (type: string) => {
+      switch(type) {
+          case 'create': return 'text-emerald-600 bg-emerald-50';
+          case 'update': return 'text-blue-600 bg-blue-50';
+          case 'delete': return 'text-rose-600 bg-rose-50';
+          case 'renew': return 'text-amber-600 bg-amber-50';
+          default: return 'text-gray-600 bg-gray-50';
+      }
+  };
+
   return (
     <div className="space-y-6 relative pb-10">
       
-      {/* Toast Notification */}
       {showToast && (
         <div className="fixed top-24 left-1/2 transform -translate-x-1/2 bg-emerald-600 text-white px-6 py-3 rounded-xl shadow-2xl z-50 flex items-center gap-3 animate-fadeIn">
           <CheckCircle size={20} />
-          <span>تنظیمات سیستم با موفقیت ذخیره شد.</span>
+          <span>{toastMsg}</span>
         </div>
       )}
 
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-800">تنظیمات سیستم</h1>
-          <p className="text-gray-500 mt-1">مدیریت اطلاعات فروشگاه، ادمین‌ها و سرویس‌ها</p>
+          <h1 className="text-2xl font-bold text-gray-800">تنظیمات و پشتیبان‌گیری</h1>
+          <p className="text-gray-500 mt-1">مدیریت اطلاعات فروشگاه، بکاپ‌گیری عمیق و لاگ سیستم</p>
         </div>
-        <button 
-          onClick={handleSave}
-          disabled={isLoading}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-2.5 rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95 disabled:opacity-70 disabled:cursor-not-allowed"
-        >
-          {isLoading ? <RefreshCw size={20} className="animate-spin" /> : <Save size={20} />}
-          <span>ذخیره تغییرات</span>
-        </button>
+        <div className="flex gap-3">
+             <button 
+                onClick={handleFullSystemBackup}
+                disabled={isLoading}
+                className="flex items-center gap-2 bg-emerald-600 text-white px-6 py-2.5 rounded-xl shadow-lg shadow-emerald-200 hover:bg-emerald-700 transition-all active:scale-95 disabled:opacity-70 disabled:cursor-not-allowed"
+            >
+                {isLoading ? <RefreshCw size={20} className="animate-spin" /> : <FileArchive size={20} />}
+                <span>دانلود بکاپ جامع (ZIP)</span>
+            </button>
+            <button 
+                onClick={handleSave}
+                disabled={isLoading}
+                className="flex items-center gap-2 bg-indigo-600 text-white px-6 py-2.5 rounded-xl shadow-lg shadow-indigo-200 hover:bg-indigo-700 transition-all active:scale-95 disabled:opacity-70 disabled:cursor-not-allowed"
+            >
+                {isLoading ? <RefreshCw size={20} className="animate-spin" /> : <Save size={20} />}
+                <span>ذخیره تنظیمات</span>
+            </button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -142,6 +270,105 @@ const Settings: React.FC = () => {
           </div>
         </div>
 
+        {/* System Logs Viewer */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden flex flex-col h-[400px]">
+             <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
+                <div className="flex items-center gap-3">
+                    <div className="p-2 bg-gray-200 text-gray-700 rounded-lg">
+                        <Activity size={20} />
+                    </div>
+                    <div>
+                        <h3 className="font-bold text-gray-800">گزارش عملکرد سیستم (Log)</h3>
+                        <p className="text-[10px] text-gray-500">ثبت تمام رخدادها برای بکاپ</p>
+                    </div>
+                </div>
+                <span className="bg-gray-200 text-gray-600 px-2 py-0.5 rounded text-xs">{logs.length} رکورد</span>
+             </div>
+             <div className="overflow-y-auto flex-1 p-0">
+                 {logs.length === 0 ? (
+                     <div className="flex flex-col items-center justify-center h-full text-gray-400">
+                         <History size={40} className="mb-2 opacity-50" />
+                         <p>هنوز رخدادی ثبت نشده است.</p>
+                     </div>
+                 ) : (
+                    <table className="w-full text-sm">
+                        <thead className="bg-gray-50 sticky top-0">
+                            <tr>
+                                <th className="px-4 py-2 text-right font-medium text-gray-500">زمان</th>
+                                <th className="px-4 py-2 text-right font-medium text-gray-500">کاربر</th>
+                                <th className="px-4 py-2 text-right font-medium text-gray-500">عملیات</th>
+                                <th className="px-4 py-2 text-right font-medium text-gray-500">جزئیات</th>
+                            </tr>
+                        </thead>
+                        <tbody className="divide-y divide-gray-100">
+                            {[...logs].reverse().map(log => (
+                                <tr key={log.id} className="hover:bg-gray-50">
+                                    <td className="px-4 py-3 text-gray-500 text-xs font-mono">{log.timestamp}</td>
+                                    <td className="px-4 py-3 text-gray-700 font-bold text-xs">{log.user}</td>
+                                    <td className="px-4 py-3">
+                                        <span className={`px-2 py-1 rounded text-[10px] font-bold ${getActionColor(log.type)}`}>
+                                            {log.action}
+                                        </span>
+                                    </td>
+                                    <td className="px-4 py-3 text-gray-600 text-xs truncate max-w-[150px]" title={log.details}>
+                                        {log.details}
+                                    </td>
+                                </tr>
+                            ))}
+                        </tbody>
+                    </table>
+                 )}
+             </div>
+        </div>
+
+        {/* Database & Backup Card */}
+        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+          <div className="p-4 border-b border-gray-100 flex items-center gap-3 bg-gray-50/50">
+            <div className="p-2 bg-emerald-100 text-emerald-600 rounded-lg">
+              <Database size={20} />
+            </div>
+            <h3 className="font-bold text-gray-800">وضعیت دیتابیس و بکاپ</h3>
+          </div>
+          <div className="p-6 space-y-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="font-medium text-gray-800">پشتیبان‌گیری خودکار</h4>
+                <p className="text-xs text-gray-400 mt-1">ذخیره خودکار تمام اطلاعات در ساعت مشخص شده</p>
+              </div>
+              <ToggleSwitch checked={config.autoBackup} onChange={(v) => setConfig({...config, autoBackup: v})} />
+            </div>
+            
+            <div className={`space-y-4 transition-all duration-300 ${!config.autoBackup ? 'opacity-50 pointer-events-none grayscale' : ''}`}>
+              <div className="space-y-2">
+                  <label className="text-sm font-medium text-gray-700 flex items-center gap-2">
+                      <Clock size={16} className="text-indigo-500" />
+                      زمان دقیق بکاپ خودکار
+                  </label>
+                  <input 
+                    type="time" 
+                    value={config.autoBackupTime}
+                    onChange={(e) => setConfig({...config, autoBackupTime: e.target.value})}
+                    className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none font-mono text-center text-lg tracking-widest"
+                  />
+                  <p className="text-[10px] text-gray-400">سیستم هر روز در این ساعت، فایل ZIP بکاپ را آماده دانلود می‌کند.</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">دوره زمانی</label>
+                <select 
+                  value={config.backupFrequency}
+                  onChange={(e) => setConfig({...config, backupFrequency: e.target.value})}
+                  className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 outline-none"
+                >
+                  <option value="daily">روزانه (هر روز)</option>
+                  <option value="weekly">هفتگی</option>
+                  <option value="monthly">ماهانه</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
         {/* Admin Management Card */}
         <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
           <div className="p-4 border-b border-gray-100 flex items-center justify-between bg-gray-50/50">
@@ -190,106 +417,6 @@ const Settings: React.FC = () => {
                          ))}
                      </tbody>
                  </table>
-             </div>
-          </div>
-        </div>
-
-        {/* Database & Backup Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 flex items-center gap-3 bg-gray-50/50">
-            <div className="p-2 bg-emerald-100 text-emerald-600 rounded-lg">
-              <Database size={20} />
-            </div>
-            <h3 className="font-bold text-gray-800">پشتیبان‌گیری و دیتابیس</h3>
-          </div>
-          <div className="p-6 space-y-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <h4 className="font-medium text-gray-800">پشتیبان‌گیری خودکار</h4>
-                <p className="text-xs text-gray-400 mt-1">ذخیره خودکار دیتابیس هر شب ساعت ۰۰:۰۰</p>
-              </div>
-              <ToggleSwitch checked={config.autoBackup} onChange={(v) => setConfig({...config, autoBackup: v})} />
-            </div>
-            
-            <div className={`space-y-2 transition-opacity ${!config.autoBackup ? 'opacity-50 pointer-events-none' : ''}`}>
-              <label className="text-sm font-medium text-gray-700">دوره زمانی</label>
-              <select 
-                value={config.backupFrequency}
-                onChange={(e) => setConfig({...config, backupFrequency: e.target.value})}
-                className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
-              >
-                <option value="daily">روزانه (پیشنهادی)</option>
-                <option value="weekly">هفتگی</option>
-                <option value="monthly">ماهانه</option>
-              </select>
-            </div>
-
-            <div className="pt-4 border-t border-gray-100">
-               <div className="flex items-center justify-between bg-gray-50 p-4 rounded-xl border border-gray-100">
-                  <div className="flex items-center gap-3">
-                     <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                     <span className="text-sm text-gray-600">آخرین بکاپ: ۱۴۰۲/۰۸/۱۵ - ۱۰:۳۰</span>
-                  </div>
-                  <button className="text-sm text-indigo-600 font-medium hover:bg-indigo-50 px-3 py-1 rounded-lg transition-colors">
-                    دانلود
-                  </button>
-               </div>
-            </div>
-          </div>
-        </div>
-
-        {/* SMS & API Card */}
-        <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 flex items-center gap-3 bg-gray-50/50">
-            <div className="p-2 bg-amber-100 text-amber-600 rounded-lg">
-              <Smartphone size={20} />
-            </div>
-            <h3 className="font-bold text-gray-800">تنظیمات پیامک (SMS)</h3>
-          </div>
-          <div className="p-6 space-y-6">
-             <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-gray-700">ارائه‌دهنده</label>
-                  <select 
-                    value={config.smsProvider}
-                    onChange={(e) => setConfig({...config, smsProvider: e.target.value})}
-                    className="w-full px-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none"
-                  >
-                    <option value="kavenegar">کاوه نگار</option>
-                    <option value="melli_payamak">ملی پیامک</option>
-                    <option value="ghasedak">قاصدک</option>
-                  </select>
-                </div>
-                <div className="space-y-2">
-                  <label className="text-sm font-medium text-gray-700">API Key</label>
-                  <div className="relative">
-                    <Key className="absolute right-3 top-2.5 text-gray-400 w-4 h-4" />
-                    <input 
-                      type="password" 
-                      value={config.smsApiKey}
-                      onChange={(e) => setConfig({...config, smsApiKey: e.target.value})}
-                      className="w-full pr-9 pl-4 py-2 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none text-left"
-                      dir="ltr"
-                    />
-                  </div>
-                </div>
-             </div>
-
-             <div className="space-y-4 pt-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-700 flex items-center gap-2">
-                     <BellRing size={16} className="text-gray-400" />
-                     ارسال پیامک تکمیل تعمیر
-                  </span>
-                  <ToggleSwitch checked={config.sendSmsOnRepairComplete} onChange={(v) => setConfig({...config, sendSmsOnRepairComplete: v})} />
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-700 flex items-center gap-2">
-                     <Shield size={16} className="text-gray-400" />
-                     هشدار انقضای گارانتی (۳ روز قبل)
-                  </span>
-                  <ToggleSwitch checked={config.sendSmsOnWarrantyWarning} onChange={(v) => setConfig({...config, sendSmsOnWarrantyWarning: v})} />
-                </div>
              </div>
           </div>
         </div>

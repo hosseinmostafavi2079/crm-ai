@@ -1,90 +1,137 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Smartphone, Wrench, ShoppingBag, Clock, CheckCircle, 
   AlertCircle, ChevronDown, ChevronUp, LogOut, Calendar,
-  ShieldCheck, Loader2
+  ShieldCheck, Loader2, Frown, User
 } from 'lucide-react';
+import { DateObject } from "react-multi-date-picker";
+import persian from "react-date-object/calendars/persian";
+import persian_fa from "react-date-object/locales/persian_fa";
+
+// Helper for date status
+const getWarrantyStatus = (expireDate?: string) => {
+    if (!expireDate) return 'unknown';
+    try {
+        const today = new DateObject({ calendar: persian, locale: persian_fa });
+        const exp = new DateObject({ date: expireDate, calendar: persian, locale: persian_fa });
+        // Calculate difference in days
+        const diffTime = exp.toUnix() - today.toUnix();
+        const diffDays = Math.ceil(diffTime / (24 * 60 * 60));
+        
+        if (diffDays < 0) return 'expired';
+        if (diffDays <= 30) return 'expiring';
+        return 'active';
+    } catch { return 'unknown'; }
+};
 
 const CustomerPortal: React.FC = () => {
   const [expandedItem, setExpandedItem] = useState<number | null>(null);
+  const [userPhone, setUserPhone] = useState('');
+  
+  // Dynamic Data States
+  const [customerInfo, setCustomerInfo] = useState<{name: string, phone: string, points: number, joinDate: string} | null>(null);
+  const [records, setRecords] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Mock Logged-in Customer Data
-  const customer = {
-    name: 'محمد حسینی',
-    phone: '09351112233',
-    memberSince: '1401/05/20',
-    loyaltyPoints: 150
-  };
-
-  // Mock Active Repairs
-  const activeRepairs = [
-    {
-      id: 201,
-      device: 'iPhone 13 Pro Max',
-      issue: 'تعویض ال‌سی‌دی و باتری',
-      status: 'in_progress', // in_progress, waiting_parts, completed
-      progress: 65,
-      estimatedCompletion: '1403/08/18',
-      costEstimated: '8,500,000',
-      trackingCode: 'REP-2024-885'
+  useEffect(() => {
+    // 1. Identify User
+    const phone = localStorage.getItem('user_phone');
+    if (!phone) {
+        // Redirect if no phone found (should ideally go back to login)
+        setLoading(false);
+        return;
     }
-  ];
+    setUserPhone(phone);
 
-  // Mock Purchase History
-  const history = [
-    {
-      id: 101,
-      type: 'purchase',
-      title: 'MacBook Air M2',
-      date: '1403/01/15',
-      warrantyStatus: 'active', // active, expiring, expired
-      warrantyDate: '1404/01/15',
-      price: '55,000,000'
-    },
-    {
-      id: 102,
-      type: 'service',
-      title: 'سرویس دوره‌ای لپ‌تاپ HP',
-      date: '1402/11/20',
-      status: 'completed',
-      price: '950,000'
-    },
-    {
-      id: 103,
-      type: 'purchase',
-      title: 'Mouse Logitech MX Master 3',
-      date: '1401/10/05',
-      warrantyStatus: 'expired',
-      warrantyDate: '1402/10/05',
-      price: '4,500,000'
-    }
-  ];
+    // 2. Fetch Data Source
+    const allRecords = JSON.parse(localStorage.getItem('service_records') || '[]');
+    
+    // 3. Filter specific to this user (Robust matching)
+    // Normalize function: remove leading zero and country codes, remove spaces
+    const normalize = (p: string) => String(p).replace(/^(\+98|0098|98|0)/, '').replace(/\s/g, '');
+    
+    const myRecords = allRecords.filter((r: any) => {
+        const recPhone = r.phoneNumber ? String(r.phoneNumber) : '';
+        return normalize(recPhone) === normalize(phone);
+    });
 
-  const getStatusBadge = (status: string) => {
-    switch(status) {
-      case 'in_progress':
-        return <span className="bg-blue-100 text-blue-600 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-1"><Loader2 size={12} className="animate-spin" /> در حال تعمیر</span>;
-      case 'waiting_parts':
-        return <span className="bg-amber-100 text-amber-600 px-3 py-1 rounded-full text-xs font-bold">منتظر قطعه</span>;
-      case 'completed':
-        return <span className="bg-emerald-100 text-emerald-600 px-3 py-1 rounded-full text-xs font-bold">تکمیل شده</span>;
-      default:
-        return null;
+    // 4. Process Data
+    if (myRecords.length > 0) {
+        // Calculate total spent for points (1 point per 100,000 Tomans)
+        const totalSpent = myRecords.reduce((acc: number, curr: any) => {
+             const price = parseInt(String(curr.totalPrice).replace(/,/g, '')) || 0;
+             return acc + price;
+        }, 0);
+        
+        const points = Math.floor(totalSpent / 100000);
+        const firstRecord = myRecords[0]; // Assuming latest or earliest based on array order
+        
+        setCustomerInfo({
+            name: firstRecord.customerName,
+            phone: phone,
+            points: points,
+            joinDate: firstRecord.receptionDate // Simple logic: first interaction date
+        });
+
+        // Map records to UI format
+        setRecords(myRecords.map((r: any) => ({
+            id: r.id,
+            title: `${r.brand} ${r.model}`,
+            type: r.brand ? 'device' : 'service', // Simple heuristic
+            date: r.receptionDate,
+            price: r.totalPrice,
+            warrantyDate: r.warrantyExpiration,
+            warrantyStatus: getWarrantyStatus(r.warrantyExpiration),
+            details: r
+        })));
     }
-  };
+
+    setLoading(false);
+  }, []);
 
   const getWarrantyBadge = (status: string) => {
     switch(status) {
       case 'active':
         return <span className="bg-emerald-50 text-emerald-600 px-2 py-0.5 rounded text-[10px] font-bold border border-emerald-100 flex items-center gap-1"><ShieldCheck size={10} /> گارانتی فعال</span>;
       case 'expiring':
-        return <span className="bg-amber-50 text-amber-600 px-2 py-0.5 rounded text-[10px] font-bold border border-amber-100 flex items-center gap-1"><Clock size={10} /> رو به انقضا</span>;
+        return <span className="bg-amber-50 text-amber-600 px-2 py-0.5 rounded text-[10px] font-bold border border-amber-100 flex items-center gap-1 animate-pulse"><Clock size={10} /> رو به انقضا</span>;
       case 'expired':
-        return <span className="bg-gray-50 text-gray-500 px-2 py-0.5 rounded text-[10px] font-bold border border-gray-200">منقضی شده</span>;
+        return <span className="bg-red-50 text-red-500 px-2 py-0.5 rounded text-[10px] font-bold border border-red-100">منقضی شده</span>;
       default:
         return null;
     }
   };
+
+  if (loading) {
+      return (
+          <div className="min-h-screen flex items-center justify-center bg-gray-50">
+              <Loader2 className="animate-spin text-indigo-600" size={32} />
+          </div>
+      );
+  }
+
+  // --- EMPTY STATE (If number not found) ---
+  if (!customerInfo) {
+      return (
+        <div className="min-h-screen bg-gray-50 font-sans flex flex-col items-center justify-center p-6 text-center" dir="rtl">
+            <div className="bg-white p-8 rounded-3xl shadow-xl max-w-sm w-full">
+                <div className="w-20 h-20 bg-gray-100 rounded-full flex items-center justify-center mx-auto mb-4 text-gray-400">
+                    <Frown size={40} />
+                </div>
+                <h2 className="text-xl font-bold text-gray-800 mb-2">اطلاعاتی یافت نشد!</h2>
+                <p className="text-gray-500 text-sm mb-6">
+                    کاربری با شماره <b>{userPhone}</b> در سیستم ثبت نشده است. اگر اخیراً خریدی داشته‌اید، لطفاً با پشتیبانی تماس بگیرید.
+                </p>
+                <button 
+                    onClick={() => { localStorage.removeItem('user_phone'); window.location.reload(); }}
+                    className="w-full py-3 bg-indigo-600 text-white rounded-xl font-bold hover:bg-indigo-700 transition-colors"
+                >
+                    بازگشت به ورود
+                </button>
+            </div>
+        </div>
+      );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 font-sans pb-10" dir="rtl">
@@ -94,14 +141,17 @@ const CustomerPortal: React.FC = () => {
         <div className="max-w-md mx-auto px-4 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
              <div className="w-10 h-10 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold shadow-lg shadow-indigo-200">
-                M
+                ID
              </div>
              <div>
                 <h1 className="text-sm font-bold text-gray-800">پنل مشتریان</h1>
-                <p className="text-[10px] text-gray-500">Mostech CRM</p>
+                <p className="text-[10px] text-gray-500">ID 724 CRM</p>
              </div>
           </div>
-          <button onClick={() => window.location.reload()} className="p-2 text-gray-400 hover:text-red-500 transition-colors">
+          <button 
+            onClick={() => { localStorage.removeItem('user_phone'); window.location.reload(); }}
+            className="p-2 text-gray-400 hover:text-red-500 transition-colors"
+          >
              <LogOut size={20} />
           </button>
         </div>
@@ -109,126 +159,106 @@ const CustomerPortal: React.FC = () => {
 
       <div className="max-w-md mx-auto px-4 py-6 space-y-6">
         
-        {/* Welcome Card */}
+        {/* Profile Card */}
         <div className="bg-gradient-to-br from-indigo-600 to-violet-600 rounded-3xl p-6 text-white shadow-xl shadow-indigo-200 relative overflow-hidden">
            <div className="absolute top-0 right-0 w-32 h-32 bg-white/10 rounded-full blur-3xl -mr-10 -mt-10"></div>
            <div className="absolute bottom-0 left-0 w-24 h-24 bg-black/10 rounded-full blur-2xl -ml-5 -mb-5"></div>
            
            <div className="relative z-10">
               <p className="text-indigo-100 text-sm mb-1">خوش آمدید،</p>
-              <h2 className="text-2xl font-bold mb-4">{customer.name}</h2>
+              <h2 className="text-2xl font-bold mb-4">{customerInfo.name}</h2>
               
               <div className="flex items-center justify-between bg-white/10 backdrop-blur-md rounded-xl p-3 border border-white/20">
                  <div className="flex items-center gap-2">
                     <Smartphone size={18} className="text-indigo-200" />
-                    <span className="text-sm font-medium">{customer.phone}</span>
+                    <span className="text-sm font-medium">{customerInfo.phone}</span>
                  </div>
                  <div className="h-4 w-[1px] bg-white/20"></div>
                  <div className="flex items-center gap-1 text-xs">
-                    <span className="text-indigo-200">امتیاز:</span>
-                    <span className="font-bold text-amber-300">{customer.loyaltyPoints}</span>
+                    <span className="text-indigo-200">امتیاز باشگاه:</span>
+                    <span className="font-bold text-amber-300 text-lg">{customerInfo.points}</span>
                  </div>
               </div>
            </div>
         </div>
 
-        {/* Active Repairs Section */}
-        {activeRepairs.length > 0 && (
-            <div className="space-y-3">
-                <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                    <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse"></div>
-                    تعمیرات فعال
-                </h3>
-                {activeRepairs.map(repair => (
-                    <div key={repair.id} className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
-                        <div className="flex justify-between items-start mb-3">
-                            <div>
-                                <h4 className="font-bold text-gray-800 text-lg">{repair.device}</h4>
-                                <p className="text-sm text-gray-500 mt-1">{repair.issue}</p>
-                            </div>
-                            {getStatusBadge(repair.status)}
-                        </div>
-                        
-                        {/* Progress Bar */}
-                        <div className="mb-4">
-                            <div className="flex justify-between text-xs text-gray-500 mb-1.5">
-                                <span>پیشرفت کار</span>
-                                <span>{repair.progress}%</span>
-                            </div>
-                            <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
-                                <div 
-                                    className="h-full bg-blue-500 rounded-full transition-all duration-1000 ease-out"
-                                    style={{ width: `${repair.progress}%` }}
-                                ></div>
-                            </div>
-                        </div>
-
-                        <div className="flex items-center justify-between pt-4 border-t border-gray-50 text-sm">
-                            <div className="flex flex-col gap-1">
-                                <span className="text-xs text-gray-400">کد رهگیری</span>
-                                <span className="font-mono font-bold text-gray-700">{repair.trackingCode}</span>
-                            </div>
-                            <div className="flex flex-col gap-1 text-left">
-                                <span className="text-xs text-gray-400">تحویل تقریبی</span>
-                                <span className="font-bold text-gray-700 flex items-center justify-end gap-1">
-                                    <Calendar size={12} className="text-gray-400" />
-                                    {repair.estimatedCompletion}
-                                </span>
-                            </div>
-                        </div>
-                    </div>
-                ))}
-            </div>
-        )}
-
-        {/* History Section */}
+        {/* Records List */}
         <div className="space-y-3">
-            <h3 className="font-bold text-gray-800">سوابق خدمات و خرید</h3>
+            <h3 className="font-bold text-gray-800 flex items-center justify-between">
+                <span>دستگاه‌ها و خدمات من</span>
+                <span className="text-xs bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full">{records.length} مورد</span>
+            </h3>
+            
             <div className="space-y-3">
-                {history.map((item) => (
+                {records.map((item) => (
                     <div 
                         key={item.id} 
                         className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden transition-all"
                     >
                         <div 
-                            className="p-4 flex items-center justify-between cursor-pointer"
+                            className="p-4 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition-colors"
                             onClick={() => setExpandedItem(expandedItem === item.id ? null : item.id)}
                         >
                             <div className="flex items-center gap-3">
-                                <div className={`w-10 h-10 rounded-full flex items-center justify-center ${item.type === 'purchase' ? 'bg-emerald-100 text-emerald-600' : 'bg-indigo-100 text-indigo-600'}`}>
-                                    {item.type === 'purchase' ? <ShoppingBag size={18} /> : <Wrench size={18} />}
+                                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${item.details.brand ? 'bg-indigo-50 text-indigo-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                                    {item.details.brand ? <ShoppingBag size={20} /> : <Wrench size={20} />}
                                 </div>
                                 <div>
                                     <h4 className="font-bold text-gray-800 text-sm">{item.title}</h4>
-                                    <span className="text-xs text-gray-400 mt-0.5 block">{item.date}</span>
+                                    <div className="flex items-center gap-2 mt-1">
+                                        <span className="text-xs text-gray-400 font-mono">{item.date}</span>
+                                        {item.warrantyDate && (
+                                            <>
+                                                <span className="text-gray-300 text-[10px]">|</span>
+                                                {getWarrantyBadge(item.warrantyStatus)}
+                                            </>
+                                        )}
+                                    </div>
                                 </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                                {item.type === 'purchase' && getWarrantyBadge(item.warrantyStatus || '')}
-                                {expandedItem === item.id ? <ChevronUp size={18} className="text-gray-300" /> : <ChevronDown size={18} className="text-gray-300" />}
+                            <div className="text-gray-300">
+                                {expandedItem === item.id ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
                             </div>
                         </div>
                         
                         {/* Expanded Details */}
                         {expandedItem === item.id && (
-                            <div className="px-4 pb-4 pt-0 bg-gray-50/50 border-t border-gray-50">
-                                <div className="grid grid-cols-2 gap-4 mt-3">
-                                    <div className="bg-white p-3 rounded-xl border border-gray-100">
-                                        <span className="text-xs text-gray-400 block mb-1">مبلغ کل</span>
-                                        <span className="font-bold text-gray-800 text-sm">{item.price} تومان</span>
+                            <div className="px-4 pb-4 pt-2 bg-gray-50/50 border-t border-gray-100 animate-fadeIn">
+                                <div className="grid grid-cols-2 gap-3 mt-2">
+                                    <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+                                        <span className="text-xs text-gray-400 block mb-1">سریال دستگاه</span>
+                                        <span className="font-mono font-bold text-gray-700 text-xs">{item.details.serialNumber || '---'}</span>
                                     </div>
-                                    {item.type === 'purchase' && (
-                                        <div className="bg-white p-3 rounded-xl border border-gray-100">
-                                            <span className="text-xs text-gray-400 block mb-1">پایان گارانتی</span>
-                                            <span className={`font-bold text-sm ${item.warrantyStatus === 'expired' ? 'text-red-500' : 'text-gray-800'}`}>
-                                                {item.warrantyDate}
+                                    <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm">
+                                        <span className="text-xs text-gray-400 block mb-1">هزینه کل</span>
+                                        <span className="font-bold text-gray-700 text-sm">{item.price} ت</span>
+                                    </div>
+                                    <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm col-span-2">
+                                        <span className="text-xs text-gray-400 block mb-1">وضعیت آنتی‌ویروس</span>
+                                        <div className="flex justify-between items-center">
+                                            <span className="font-bold text-gray-700 text-sm">
+                                                {item.details.antivirusType === 'single' ? 'تک کاربره' : 
+                                                 item.details.antivirusType === 'double' ? 'دو کاربره' : 'ندارد'}
                                             </span>
                                         </div>
-                                    )}
+                                    </div>
+                                    <div className="bg-white p-3 rounded-xl border border-gray-100 shadow-sm col-span-2">
+                                         <span className="text-xs text-gray-400 block mb-1">توضیحات</span>
+                                         <p className="text-xs text-gray-600 leading-relaxed">{item.details.description || 'توضیحاتی ثبت نشده است.'}</p>
+                                    </div>
                                 </div>
-                                <button className="w-full mt-3 py-2 text-xs text-indigo-600 font-medium bg-indigo-50 hover:bg-indigo-100 rounded-lg transition-colors">
-                                    مشاهده فاکتور دیجیتال
-                                </button>
+                                {item.warrantyStatus === 'expiring' && (
+                                    <div className="mt-3 bg-amber-50 text-amber-700 p-3 rounded-xl text-xs flex items-start gap-2 border border-amber-100">
+                                        <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                                        <p>مشتری گرامی، گارانتی یا آنتی‌ویروس این دستگاه رو به اتمام است. جهت تمدید آنلاین یا حضوری اقدام نمایید.</p>
+                                    </div>
+                                )}
+                                {item.warrantyStatus === 'expired' && (
+                                    <div className="mt-3 bg-red-50 text-red-700 p-3 rounded-xl text-xs flex items-start gap-2 border border-red-100">
+                                        <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                                        <p>مشتری گرامی، سرویس این دستگاه منقضی شده است.</p>
+                                    </div>
+                                )}
                             </div>
                         )}
                     </div>

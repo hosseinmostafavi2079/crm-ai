@@ -17,7 +17,11 @@
     "recharts": "^3.6.0",
     "react-multi-date-picker": "4.4.1",
     "react-date-object": "2.1.9",
-    "xlsx": "0.18.5"
+    "xlsx": "0.18.5",
+    "jszip": "3.10.1",
+    "@vitejs/plugin-react": "^5.1.2",
+    "path": "^0.12.7",
+    "vite": "^7.3.0"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",

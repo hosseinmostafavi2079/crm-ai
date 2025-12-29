@@ -2,257 +2,411 @@ import React, { useState, useEffect } from 'react';
 import { 
   Search, Filter, Smartphone, MapPin, 
   ShoppingBag, Wrench, Star, MoreHorizontal, UserCheck, X,
-  Calendar, CheckCircle, ArrowLeft, UploadCloud, Loader2, MessageSquare, Zap, ShieldAlert, Clock, Send
+  Calendar, CheckCircle, ArrowLeft, UploadCloud, Loader2, MessageSquare, Zap, ShieldAlert, Clock, Send, Laptop, Shield, Monitor, ShieldCheck, CalendarDays, BellRing, AlertTriangle, FileSpreadsheet, History, Mail, FileText, Activity, PlusCircle, Hash
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
+import { DateObject } from "react-multi-date-picker";
+import persian from "react-date-object/calendars/persian";
+import persian_fa from "react-date-object/locales/persian_fa";
 
 // Types
 type CustomerType = 'buyer' | 'service' | 'both';
-type CustomerTag = 'warranty_expiring' | 'antivirus_expiring' | 'service_due';
+
+interface DeviceInfo {
+    id: number; // Unique ID of the record
+    brand: string;
+    model: string;
+    serial: string;
+    warrantyExp: string;
+    antivirus: string;
+    antivirusExp: string; 
+    hasWindows: boolean;
+    receptionDate: string;
+}
 
 interface Customer {
-  id: number;
+  // We use phone as the unique key for aggregation
   name: string;
   phone: string;
   type: CustomerType;
   totalSpent: number;
-  lastVisit: string;
   itemsBought: number;
-  servicesCount: number;
-  tags?: CustomerTag[]; // Added for smart filtering
+  devices: DeviceInfo[]; // Array of all devices
 }
 
-// SMS Campaign Types
-type SmsFilterType = 'all' | 'warranty_expiring' | 'antivirus_renewal' | 'periodic_service';
+interface CustomerHistory {
+    id: number;
+    type: 'sale' | 'repair' | 'sms';
+    date: string;
+    title: string;
+    details: string;
+    cost?: number;
+    status?: string;
+}
 
-// Mock Data
-const MOCK_CUSTOMERS: Customer[] = [
-  {
-    id: 1,
-    name: 'رضا کمالی',
-    phone: '09123334444',
-    type: 'buyer', 
-    totalSpent: 45000000,
-    lastVisit: '1402/08/10',
-    itemsBought: 1,
-    servicesCount: 0,
-    tags: ['warranty_expiring']
-  },
-  {
-    id: 2,
-    name: 'محمد حسینی',
-    phone: '09121111111',
-    type: 'service', 
-    totalSpent: 1200000,
-    lastVisit: '1402/08/15',
-    itemsBought: 0,
-    servicesCount: 1,
-    tags: ['service_due']
-  },
-  {
-    id: 3,
-    name: 'سارا احمدی',
-    phone: '09122222222',
-    type: 'both', 
-    totalSpent: 43000000, 
-    lastVisit: '1402/08/10',
-    itemsBought: 1,
-    servicesCount: 1,
-    tags: ['antivirus_expiring', 'warranty_expiring']
-  },
-  {
-    id: 4,
-    name: 'کیوان رحیمی',
-    phone: '09350001122',
-    type: 'buyer',
-    totalSpent: 8500000,
-    lastVisit: '1401/10/15',
-    itemsBought: 1,
-    servicesCount: 0
-  },
-  {
-    id: 5,
-    name: 'امید زند',
-    phone: '09198887777',
-    type: 'service', 
-    totalSpent: 350000,
-    lastVisit: '1403/01/20',
-    itemsBought: 0,
-    servicesCount: 2,
-    tags: ['antivirus_expiring']
-  }
-];
+const logSystemAction = (action: string, details: string, type: 'create' | 'update' | 'delete' | 'renew') => {
+    const logs = JSON.parse(localStorage.getItem('system_logs') || '[]');
+    const date = new DateObject({ calendar: persian, locale: persian_fa }).format("YYYY/MM/DD HH:mm:ss");
+    logs.push({
+        id: Date.now(),
+        action,
+        details,
+        user: 'مدیر سیستم', 
+        timestamp: date,
+        type
+    });
+    localStorage.setItem('system_logs', JSON.stringify(logs));
+};
 
 const Customers: React.FC = () => {
-  const [customers, setCustomers] = useState<Customer[]>(MOCK_CUSTOMERS);
+  const [customers, setCustomers] = useState<Customer[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterType, setFilterType] = useState<CustomerType | 'all'>('all');
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
   
+  // History State
+  const [customerHistory, setCustomerHistory] = useState<CustomerHistory[]>([]);
+  const [activeModalTab, setActiveModalTab] = useState<'info' | 'history'>('info');
+
   // Import State
   const [isImporting, setIsImporting] = useState(false);
   const [showToast, setShowToast] = useState(false);
   const [toastMessage, setToastMessage] = useState('');
 
-  // SMS Modal State
+  // Renew & SMS State
+  const [isRenewModalOpen, setIsRenewModalOpen] = useState(false);
   const [isSmsModalOpen, setIsSmsModalOpen] = useState(false);
-  const [smsFilter, setSmsFilter] = useState<SmsFilterType>('warranty_expiring');
-  const [smsMessage, setSmsMessage] = useState('');
-  const [isSendingSms, setIsSendingSms] = useState(false);
-  const [targetCount, setTargetCount] = useState(0);
+  const [targetDevice, setTargetDevice] = useState<DeviceInfo | null>(null);
+  const [renewTarget, setRenewTarget] = useState<'warranty' | 'antivirus'>('warranty');
+  const [renewDuration, setRenewDuration] = useState<number>(12); // Months
+  const [smsText, setSmsText] = useState('');
+
+  // --- Helper: Calculate Days Remaining ---
+  const getDaysRemaining = (dateStr: string) => {
+      if (!dateStr || dateStr.length < 6) return -9999; 
+      try {
+          const targetDate = new DateObject({ date: dateStr, calendar: persian, locale: persian_fa });
+          const today = new DateObject({ calendar: persian, locale: persian_fa });
+          const diffTime = targetDate.toUnix() - today.toUnix();
+          const diffDays = Math.ceil(diffTime / (60 * 60 * 24));
+          return diffDays;
+      } catch (e) {
+          return -9999;
+      }
+  };
+
+  // LOAD DATA
+  const loadCustomers = () => {
+    const savedSales = localStorage.getItem('service_records');
+    const salesRecords: any[] = savedSales ? JSON.parse(savedSales) : [];
+
+    const customerMap = new Map<string, Customer>();
+
+    salesRecords.forEach(rec => {
+        const phone = rec.phoneNumber ? String(rec.phoneNumber) : '';
+        if (!phone) return;
+
+        const price = parseInt(String(rec.totalPrice).replace(/,/g, '')) || 0;
+        const avExp = rec.antivirusExpiration || ''; 
+
+        const newDevice: DeviceInfo = {
+            id: rec.id,
+            brand: rec.brand,
+            model: rec.model,
+            serial: rec.serialNumber,
+            warrantyExp: rec.warrantyExpiration,
+            antivirus: rec.antivirusType === 'none' ? 'غیرفعال' : (rec.antivirusType === 'single' ? 'تک کاربره' : 'دو کاربره'),
+            antivirusExp: avExp,
+            hasWindows: rec.hasWindows,
+            receptionDate: rec.receptionDate
+        };
+
+        if (customerMap.has(phone)) {
+            const existing = customerMap.get(phone)!;
+            existing.totalSpent += price;
+            existing.itemsBought += 1;
+            existing.devices.push(newDevice); 
+            if (rec.customerName) existing.name = rec.customerName; 
+        } else {
+            customerMap.set(phone, {
+                name: rec.customerName || 'بدون نام',
+                phone: phone,
+                type: 'buyer', 
+                totalSpent: price,
+                itemsBought: 1,
+                devices: [newDevice]
+            });
+        }
+    });
+
+    setCustomers(Array.from(customerMap.values()).reverse());
+  };
+
+  useEffect(() => {
+    loadCustomers();
+  }, []);
+
+  // --- BUILD HISTORY ---
+  useEffect(() => {
+      if (selectedCustomer) {
+          const sales: any[] = JSON.parse(localStorage.getItem('service_records') || '[]');
+          const repairs: any[] = JSON.parse(localStorage.getItem('repair_records') || '[]');
+          const smsLogs: any[] = JSON.parse(localStorage.getItem('sms_logs') || '[]');
+          
+          const history: CustomerHistory[] = [];
+
+          // 1. Add Sales
+          sales.filter(s => String(s.phoneNumber) === selectedCustomer.phone).forEach(s => {
+              history.push({
+                  id: s.id,
+                  type: 'sale',
+                  date: s.receptionDate,
+                  title: 'خرید / پذیرش',
+                  details: `دستگاه: ${s.brand} ${s.model} - سریال: ${s.serialNumber}`,
+                  cost: parseInt(String(s.totalPrice).replace(/,/g, '')),
+                  status: 'completed'
+              });
+          });
+
+          // 2. Add Repairs
+          repairs.filter(r => String(r.phoneNumber) === selectedCustomer.phone).forEach(r => {
+              history.push({
+                  id: r.id,
+                  type: 'repair',
+                  date: r.serviceDate,
+                  title: 'تعمیرات',
+                  details: `دستگاه: ${r.deviceModel} - ${r.serviceType === 'hardware' ? 'سخت‌افزاری' : 'نرم‌افزاری'}`,
+                  cost: r.cost,
+                  status: r.status
+              });
+          });
+
+          // 3. Add SMS
+          smsLogs.filter(msg => String(msg.recipientPhone) === selectedCustomer.phone).forEach(msg => {
+              history.push({
+                  id: msg.id,
+                  type: 'sms',
+                  date: msg.sentDate.split(' ')[0],
+                  title: 'ارسال پیامک',
+                  details: `متن: ${msg.messageContent.substring(0, 40)}...`,
+                  status: 'sent'
+              });
+          });
+
+          history.sort((a, b) => b.date.localeCompare(a.date));
+          setCustomerHistory(history);
+      }
+  }, [selectedCustomer]);
+
 
   const filteredCustomers = customers.filter(c => {
-    const matchesSearch = c.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                          c.phone.includes(searchQuery);
+    const query = searchQuery ? searchQuery.toLowerCase() : '';
+    const name = c.name ? String(c.name).toLowerCase() : '';
+    const phone = c.phone ? String(c.phone) : '';
+
+    const matchesSearch = name.includes(query) || phone.includes(query);
     const matchesFilter = filterType === 'all' || c.type === filterType;
     return matchesSearch && matchesFilter;
   });
 
-  // Calculate target audience based on SMS filter
-  useEffect(() => {
-    let count = 0;
-    let template = "";
+  // --- ACTIONS ---
 
-    switch (smsFilter) {
-        case 'all':
-            count = customers.length;
-            template = "مشتری گرامی {نام_مشتری}،\nجشنواره فروش ویژه فروشگاه ماستک شروع شد.\nمنتظر دیدار شما هستیم.";
-            break;
-        case 'warranty_expiring':
-            count = customers.filter(c => c.tags?.includes('warranty_expiring')).length;
-            template = "مشتری گرامی {نام_مشتری}،\nگارانتی دستگاه شما رو به پایان است. جهت تمدید گارانتی یا سرویس جنرال با ما تماس بگیرید.\nفروشگاه ماستک";
-            break;
-        case 'antivirus_renewal':
-            count = customers.filter(c => c.tags?.includes('antivirus_expiring')).length;
-            template = "سلام {نام_مشتری} عزیز،\nاعتبار لایسنس آنتی‌ویروس شما ظرف ۷ روز آینده به پایان می‌رسد. جهت تمدید آنلاین کلیک کنید:\nlink.com/renew";
-            break;
-        case 'periodic_service':
-            count = customers.filter(c => c.tags?.includes('service_due')).length;
-            template = "مشتری گرامی،\nزمان سرویس دوره‌ای لپ‌تاپ شما فرا رسیده است. سرویس به موقع عمر دستگاه شما را افزایش می‌دهد.\nفروشگاه ماستک";
-            break;
-    }
-    setTargetCount(count);
-    setSmsMessage(template);
-  }, [smsFilter, customers]);
+  const handleRenewClick = (device: DeviceInfo, type: 'warranty' | 'antivirus') => {
+      setTargetDevice(device);
+      setRenewTarget(type);
+      setRenewDuration(12);
+      setIsRenewModalOpen(true);
+  };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      setIsImporting(true);
-      
-      const reader = new FileReader();
-      reader.onload = (evt) => {
-        try {
-            const bstr = evt.target?.result;
-            const wb = XLSX.read(bstr, { type: 'binary' });
-            const wsname = wb.SheetNames[0];
-            const ws = wb.Sheets[wsname];
-            const data = XLSX.utils.sheet_to_json(ws);
-            
-            // Map data to Customer structure
-            const newCustomers: Customer[] = data.map((row: any, index: number) => {
-                // Heuristic mapping for Persian or English headers
-                const name = row['نام'] || row['نام مشتری'] || row['Name'] || row['name'] || 'کاربر ناشناس';
-                const phone = row['تلفن'] || row['موبایل'] || row['شماره تماس'] || row['Phone'] || row['phone'] || '---';
-                const typeRaw = row['نوع'] || row['نوع مشتری'] || row['Type'] || 'buyer';
-                
-                let type: CustomerType = 'buyer';
-                if (String(typeRaw).toLowerCase().includes('خدمات') || String(typeRaw).toLowerCase().includes('service')) type = 'service';
-                if (String(typeRaw).toLowerCase().includes('هر دو') || String(typeRaw).toLowerCase().includes('both') || String(typeRaw).toLowerCase().includes('vip')) type = 'both';
+  const handleSmsClick = (device: DeviceInfo) => {
+      setTargetDevice(device);
+      setSmsText(`مشتری گرامی، سرویس دستگاه ${device.brand} ${device.model} شما رو به اتمام است. لطفا جهت تمدید اقدام نمایید.`);
+      setIsSmsModalOpen(true);
+  };
 
-                return {
-                    id: Date.now() + index,
-                    name: String(name),
-                    phone: String(phone),
-                    type: type,
-                    totalSpent: 0, // Default for imported
-                    lastVisit: new Date().toLocaleDateString('fa-IR'),
-                    itemsBought: 0,
-                    servicesCount: 0,
-                    tags: []
-                };
-            });
+  const handleConfirmRenew = () => {
+      if (!selectedCustomer || !targetDevice) return;
 
-            if (newCustomers.length > 0) {
-                setCustomers(prev => [...newCustomers, ...prev]);
-                setToastMessage(`${newCustomers.length} مشتری با موفقیت افزوده شدند.`);
-                setShowToast(true);
-            } else {
-                 setToastMessage('فایل اکسل خالی است یا ستون‌ها شناسایی نشدند.');
-                 setShowToast(true);
-            }
-
-        } catch (error) {
-            console.error('Excel Import Error:', error);
-            setToastMessage('خطا در خواندن فایل اکسل. لطفا فرمت فایل را بررسی کنید.');
-            setShowToast(true);
-        } finally {
-            setIsImporting(false);
-            e.target.value = ''; // Reset input to allow re-uploading same file
-            setTimeout(() => setShowToast(false), 4000);
+      let currentExpStr = renewTarget === 'warranty' ? targetDevice.warrantyExp : targetDevice.antivirusExp;
+      let dateObj;
+      try {
+        if(currentExpStr && currentExpStr.length > 5) {
+            dateObj = new DateObject({ date: currentExpStr, calendar: persian, locale: persian_fa });
+            const today = new DateObject({ calendar: persian, locale: persian_fa });
+            if (dateObj.toUnix() < today.toUnix()) dateObj = today; // If expired, start from today
+        } else {
+            dateObj = new DateObject({ calendar: persian, locale: persian_fa });
         }
-      };
+      } catch {
+        dateObj = new DateObject({ calendar: persian, locale: persian_fa });
+      }
+
+      dateObj.add(renewDuration, "months");
+      const newDateStr = dateObj.format();
+
+      // Update LocalStorage
+      const savedSales = JSON.parse(localStorage.getItem('service_records') || '[]');
+      const updatedSales = savedSales.map((record: any) => {
+          if (record.id === targetDevice.id) {
+              const updatedRecord = { ...record };
+              if (renewTarget === 'warranty') {
+                  updatedRecord.warrantyExpiration = newDateStr;
+                  updatedRecord.description = (record.description || '') + ` | تمدید گارانتی (${renewDuration} ماه) در ${new Date().toLocaleDateString('fa-IR')}`;
+              } else {
+                  updatedRecord.antivirusExpiration = newDateStr; 
+                  if (updatedRecord.antivirusType === 'none') updatedRecord.antivirusType = 'single';
+                  updatedRecord.description = (record.description || '') + ` | تمدید آنتی‌ویروس (${renewDuration} ماه) در ${new Date().toLocaleDateString('fa-IR')}`;
+              }
+              return updatedRecord;
+          }
+          return record;
+      });
+      localStorage.setItem('service_records', JSON.stringify(updatedSales));
       
-      reader.readAsBinaryString(file);
-    }
+      logSystemAction('تمدید سرویس', `تمدید ${renewTarget === 'warranty' ? 'گارانتی' : 'آنتی‌ویروس'} برای ${selectedCustomer.name} (دستگاه ${targetDevice.model})`, 'renew');
+
+      // Auto SMS
+      const smsConfig = JSON.parse(localStorage.getItem('sms_config') || '{}');
+      if (smsConfig.sendOnRenewal !== false) { 
+           const message = `مشتری گرامی، ${renewTarget === 'warranty' ? 'گارانتی' : 'آنتی‌ویروس'} دستگاه ${targetDevice.model} تا ${newDateStr} تمدید شد.`;
+           const smsLogs = JSON.parse(localStorage.getItem('sms_logs') || '[]');
+           smsLogs.push({
+               id: Date.now() + Math.random(),
+               recipientName: selectedCustomer.name,
+               recipientPhone: selectedCustomer.phone,
+               category: 'تاییدیه تمدید',
+               messageContent: message,
+               sentDate: new DateObject({ calendar: persian, locale: persian_fa }).format("YYYY/MM/DD HH:mm:ss"),
+               status: 'sent'
+           });
+           localStorage.setItem('sms_logs', JSON.stringify(smsLogs));
+           setToastMessage('تمدید انجام شد و پیامک ارسال گردید.');
+      } else {
+           setToastMessage('تمدید با موفقیت ثبت شد.');
+      }
+
+      // Reload
+      loadCustomers();
+      
+      // Immediate UI Update
+      const updatedDeviceList = selectedCustomer.devices.map(d => {
+          if (d.id === targetDevice.id) {
+              const n = {...d};
+              if (renewTarget === 'warranty') n.warrantyExp = newDateStr;
+              else {
+                  n.antivirusExp = newDateStr;
+                  if (n.antivirus === 'غیرفعال') n.antivirus = 'تک کاربره';
+              }
+              return n;
+          }
+          return d;
+      });
+      setSelectedCustomer({...selectedCustomer, devices: updatedDeviceList});
+
+      setShowToast(true);
+      setIsRenewModalOpen(false);
+      setTimeout(() => setShowToast(false), 4000);
   };
 
-  const handleSendSms = () => {
-    setIsSendingSms(true);
-    setTimeout(() => {
-        setIsSendingSms(false);
-        setIsSmsModalOpen(false);
-        setToastMessage(`پیامک با موفقیت برای ${targetCount} نفر در صف ارسال قرار گرفت.`);
-        setShowToast(true);
-        setTimeout(() => setShowToast(false), 3000);
-    }, 1500);
+  const handleSendDeviceSms = () => {
+      if (!selectedCustomer || !targetDevice) return;
+
+      const smsLogs = JSON.parse(localStorage.getItem('sms_logs') || '[]');
+      smsLogs.push({
+           id: Date.now() + Math.random(),
+           recipientName: selectedCustomer.name,
+           recipientPhone: selectedCustomer.phone,
+           category: 'یادآوری دستی',
+           messageContent: `${smsText} (مدل: ${targetDevice.model})`,
+           sentDate: new DateObject({ calendar: persian, locale: persian_fa }).format("YYYY/MM/DD HH:mm:ss"),
+           status: 'sent'
+      });
+      localStorage.setItem('sms_logs', JSON.stringify(smsLogs));
+      
+      setToastMessage('پیامک با موفقیت در صف ارسال قرار گرفت.');
+      setShowToast(true);
+      setIsSmsModalOpen(false);
+      setTimeout(() => setShowToast(false), 3000);
+      
+      // Update history tab immediately
+      setCustomerHistory(prev => [{
+          id: Date.now(),
+          type: 'sms',
+          date: new DateObject({ calendar: persian, locale: persian_fa }).format("YYYY/MM/DD"),
+          title: 'ارسال پیامک',
+          details: `برای ${targetDevice.model}: ${smsText.substring(0, 20)}...`,
+          status: 'sent'
+      }, ...prev]);
   };
 
+  // UI Helpers
   const getTypeBadge = (type: CustomerType) => {
     switch (type) {
-      case 'buyer':
-        return (
-          <span className="px-3 py-1 inline-flex items-center gap-1.5 text-xs font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100">
-            <ShoppingBag size={12} />
-            خریدار کالا
-          </span>
-        );
-      case 'service':
-        return (
-          <span className="px-3 py-1 inline-flex items-center gap-1.5 text-xs font-semibold rounded-full bg-blue-50 text-blue-700 border border-blue-100">
-            <Wrench size={12} />
-            مشتری خدمات
-          </span>
-        );
-      case 'both':
-        return (
-          <span className="px-3 py-1 inline-flex items-center gap-1.5 text-xs font-semibold rounded-full bg-purple-50 text-purple-700 border border-purple-100">
-            <Star size={12} />
-            مشتری وفادار (VIP)
-          </span>
-        );
+      case 'buyer': return <span className="px-3 py-1 inline-flex items-center gap-1.5 text-xs font-semibold rounded-full bg-emerald-50 text-emerald-700 border border-emerald-100"><ShoppingBag size={12} />خریدار کالا</span>;
+      case 'service': return <span className="px-3 py-1 inline-flex items-center gap-1.5 text-xs font-semibold rounded-full bg-blue-50 text-blue-700 border border-blue-100"><Wrench size={12} />مشتری خدمات</span>;
+      case 'both': return <span className="px-3 py-1 inline-flex items-center gap-1.5 text-xs font-semibold rounded-full bg-purple-50 text-purple-700 border border-purple-100"><Star size={12} />مشتری وفادار (VIP)</span>;
     }
   };
 
-  const getCustomerHistory = (customer: Customer) => {
-    // Mock history generation
-    const sales = customer.itemsBought > 0 ? [
-        { id: 101, product: 'Lenovo Legion 5 Pro', date: '1402/08/10', price: 45000000, warranty: '18 ماه ماتریس' },
-        ...(customer.itemsBought > 1 || customer.type === 'both' ? [{ id: 102, product: 'Logitech MX Master 3', date: '1402/08/10', price: 4500000, warranty: '12 ماه پانا' }] : [])
-    ] : [];
+  const renderStatusBadge = (days: number, label: string) => {
+      if (days === -9999) return <span className="text-[10px] text-gray-300">ثبت نشده</span>;
+      if (days < 0) return <span className="text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-bold">منقضی شده</span>;
+      if (days <= 30) return <span className="text-[10px] bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded font-bold animate-pulse">رو به اتمام ({days} روز)</span>;
+      return <span className="text-[10px] bg-emerald-50 text-emerald-600 px-1.5 py-0.5 rounded font-bold">فعال</span>;
+  };
 
-    const repairs = customer.servicesCount > 0 ? [
-        { id: 201, device: 'iPhone 13 Promax', service: 'تعویض ال‌سی‌دی', date: '1402/09/15', cost: 8500000, status: 'completed' },
-        ...(customer.servicesCount > 1 ? [{ id: 202, device: 'HP Victus 15', service: 'سرویس دوره ای و خمیر سیلیکون', date: '1403/02/05', cost: 950000, status: 'in_progress' }] : [])
-    ] : [];
+  const handleExportExcel = () => {
+    const flatData: any[] = [];
 
-    return { sales, repairs };
+    // Loop through customers and then their devices to create a flat structure
+    filteredCustomers.forEach(c => {
+        c.devices.forEach(d => {
+            flatData.push({
+                'نام مشتری': c.name,
+                'شماره تماس': c.phone,
+                'برند دستگاه': d.brand,
+                'مدل': d.model,
+                'شماره سریال': d.serial,
+                'تاریخ پذیرش': d.receptionDate,
+                'وضعیت ویندوز': d.hasWindows ? 'دارد' : 'ندارد',
+                'وضعیت آنتی‌ویروس': d.antivirus,
+                'انقضای آنتی‌ویروس': d.antivirusExp || '-',
+                'انقضای گارانتی': d.warrantyExp || '-',
+                'هزینه کل (مشتری)': c.totalSpent.toLocaleString() // Note: This is total per customer, not per device, as per original data structure
+            });
+        });
+    });
+
+    const ws = XLSX.utils.json_to_sheet(flatData);
+    
+    // Auto-width for better readability
+    const wscols = [
+        {wch: 20}, // Name
+        {wch: 15}, // Phone
+        {wch: 15}, // Brand
+        {wch: 20}, // Model
+        {wch: 20}, // Serial
+        {wch: 15}, // Date
+        {wch: 10}, // Win
+        {wch: 15}, // Antivirus
+        {wch: 15}, // AV Exp
+        {wch: 15}, // Warranty Exp
+        {wch: 15}, // Total Cost
+    ];
+    ws['!cols'] = wscols;
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Customers_Devices");
+    XLSX.writeFile(wb, "Customers_Detailed.xlsx");
+    
+    setToastMessage('خروجی جامع اکسل (به تفکیک دستگاه) ایجاد شد.');
+    setShowToast(true);
+    setTimeout(() => setShowToast(false), 3000);
   };
 
   return (
     <div className="space-y-6 relative">
       
-      {/* Toast Notification */}
       {showToast && (
         <div className="fixed top-24 left-1/2 transform -translate-x-1/2 bg-emerald-600 text-white px-6 py-3 rounded-xl shadow-2xl z-50 flex items-center gap-3 animate-fadeIn">
           <CheckCircle size={20} />
@@ -260,134 +414,75 @@ const Customers: React.FC = () => {
         </div>
       )}
 
+      {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-gray-800">لیست مشتریان</h1>
-          <p className="text-gray-500 mt-1">تفکیک خریداران کالا و دریافت‌کنندگان خدمات فنی</p>
+          <p className="text-gray-500 mt-1">مدیریت یکپارچه مشتریان و سوابق دستگاه‌ها</p>
         </div>
-        <div className="flex gap-3">
-            <button 
-                onClick={() => setIsSmsModalOpen(true)}
-                className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2.5 rounded-xl hover:bg-indigo-700 shadow-lg shadow-indigo-200 transition-all"
-            >
-                <MessageSquare size={20} />
-                <span className="hidden sm:inline">ارسال پیامک هوشمند</span>
+        <div className="flex flex-wrap gap-3">
+            <button onClick={handleExportExcel} className="flex items-center gap-2 bg-emerald-600 text-white px-4 py-2.5 rounded-xl hover:bg-emerald-700 shadow-lg shadow-emerald-200 transition-all">
+                <FileSpreadsheet size={20} />
+                <span className="hidden sm:inline">خروجی اکسل جامع</span>
             </button>
-            <label 
-                className={`
-                cursor-pointer flex items-center gap-2 bg-white text-gray-600 border border-gray-200 px-4 py-2.5 rounded-xl hover:bg-gray-50 transition-all shadow-sm
-                ${isImporting ? 'opacity-70 pointer-events-none' : ''}
-                `}
-            >
-                {isImporting ? (
-                <Loader2 size={20} className="animate-spin" />
-                ) : (
-                <UploadCloud size={20} />
-                )}
-                <span className="hidden sm:inline">
-                {isImporting ? 'در حال پردازش...' : 'وارد کردن لیست اکسل'}
-                </span>
-                <input 
-                type="file" 
-                className="hidden" 
-                accept=".xlsx,.xls,.csv" 
-                onChange={handleFileUpload}
-                />
-            </label>
         </div>
       </div>
 
+      {/* Table */}
       <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
-        {/* Toolbar */}
-        <div className="p-4 border-b border-gray-100 flex flex-col md:flex-row gap-4">
-           <div className="flex-1 flex items-center bg-gray-50 rounded-xl px-4 py-2 border border-gray-100 focus-within:ring-2 focus-within:ring-indigo-100 focus-within:bg-white transition-all">
+        <div className="p-4 border-b border-gray-100">
+           <div className="flex items-center bg-gray-50 rounded-xl px-4 py-2 border border-gray-100 focus-within:ring-2 focus-within:ring-indigo-100 w-full md:w-96">
               <Search size={18} className="text-gray-400 ml-2" />
               <input 
                 type="text" 
-                placeholder="جستجو نام مشتری یا شماره تماس..." 
-                className="bg-transparent border-none outline-none text-sm w-full text-gray-700 placeholder-gray-400"
+                placeholder="جستجو..." 
+                className="bg-transparent border-none outline-none text-sm w-full"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
            </div>
-           
-           <div className="flex items-center gap-2 bg-white rounded-xl">
-              <div className="relative">
-                <Filter size={18} className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" />
-                <select
-                    value={filterType}
-                    onChange={(e) => setFilterType(e.target.value as CustomerType | 'all')}
-                    className="pl-4 pr-10 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm text-gray-700 outline-none focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all cursor-pointer appearance-none min-w-[180px]"
-                >
-                    <option value="all">همه مشتریان</option>
-                    <option value="buyer">خریداران کالا</option>
-                    <option value="service">مشتریان خدمات</option>
-                    <option value="both">مشتریان وفادار (VIP)</option>
-                </select>
-              </div>
-           </div>
         </div>
 
-        {/* Table */}
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50/50">
               <tr>
-                <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">نام مشتری</th>
-                <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">نوع مشتری</th>
-                <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">تاریخ آخرین مراجعه</th>
-                <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">تعداد خرید</th>
-                <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">تعداد خدمات</th>
-                <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">جمع کل (تومان)</th>
+                <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">مشتری</th>
+                <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">وضعیت</th>
+                <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">تعداد دستگاه</th>
+                <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">آخرین مراجعه</th>
                 <th className="px-6 py-4 text-right text-xs font-semibold text-gray-500 uppercase">عملیات</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
               {filteredCustomers.map((customer) => (
                 <tr 
-                    key={customer.id} 
-                    onClick={() => setSelectedCustomer(customer)}
+                    key={customer.phone} 
+                    onClick={() => { setSelectedCustomer(customer); setActiveModalTab('info'); }}
                     className="hover:bg-indigo-50/30 transition-colors cursor-pointer group"
                 >
                   <td className="px-6 py-4 whitespace-nowrap">
                     <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-transform group-hover:scale-110 ${customer.type === 'buyer' ? 'bg-emerald-100 text-emerald-600' : customer.type === 'service' ? 'bg-blue-100 text-blue-600' : 'bg-purple-100 text-purple-600'}`}>
-                            {customer.name.charAt(0)}
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold transition-transform group-hover:scale-110 ${customer.type === 'buyer' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}>
+                            {customer.name ? customer.name.charAt(0) : '?'}
                         </div>
                         <div className="flex flex-col">
-                            <span className="text-sm font-medium text-gray-800 group-hover:text-indigo-600 transition-colors">{customer.name}</span>
-                            <span className="text-xs text-gray-400 flex items-center gap-1">
-                                <Smartphone size={10} />
-                                {customer.phone}
-                            </span>
+                            <span className="text-sm font-medium text-gray-800">{customer.name}</span>
+                            <span className="text-xs text-gray-400 font-mono">{customer.phone}</span>
                         </div>
                     </div>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap">
-                    {getTypeBadge(customer.type)}
+                  <td className="px-6 py-4">{getTypeBadge(customer.type)}</td>
+                  <td className="px-6 py-4">
+                     <span className="text-sm font-bold text-gray-700 bg-gray-100 px-3 py-1 rounded-lg">
+                         {customer.itemsBought} دستگاه
+                     </span>
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
-                    {customer.lastVisit}
+                   <td className="px-6 py-4 text-sm text-gray-600 font-mono">
+                     {customer.devices.length > 0 ? customer.devices[customer.devices.length - 1].receptionDate : '-'}
                   </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-center">
-                    {customer.itemsBought > 0 ? (
-                        <span className="font-bold text-gray-800">{customer.itemsBought} دستگاه</span>
-                    ) : (
-                        <span className="text-gray-300">-</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 text-center">
-                    {customer.servicesCount > 0 ? (
-                        <span className="font-bold text-gray-800">{customer.servicesCount} مورد</span>
-                    ) : (
-                        <span className="text-gray-300">-</span>
-                    )}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm font-bold text-gray-800">
-                    {customer.totalSpent.toLocaleString()}
-                  </td>
-                  <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                    <button className="p-2 text-gray-400 hover:bg-gray-200 hover:text-gray-600 rounded-lg transition-colors">
+                  <td className="px-6 py-4 text-sm text-gray-500">
+                    <button className="p-2 text-gray-400 hover:bg-gray-200 rounded-lg">
                         <ArrowLeft size={20} />
                     </button>
                   </td>
@@ -401,223 +496,201 @@ const Customers: React.FC = () => {
       {/* Customer Detail Modal */}
       {selectedCustomer && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm animate-fadeIn">
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
-                {/* Header */}
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
                 <div className="p-6 border-b border-gray-100 flex justify-between items-start bg-gray-50/50">
                     <div className="flex items-center gap-4">
-                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-xl font-bold ${selectedCustomer.type === 'buyer' ? 'bg-emerald-100 text-emerald-600' : selectedCustomer.type === 'service' ? 'bg-blue-100 text-blue-600' : 'bg-purple-100 text-purple-600'}`}>
+                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-xl font-bold ${selectedCustomer.type === 'buyer' ? 'bg-emerald-100 text-emerald-600' : 'bg-blue-100 text-blue-600'}`}>
                             {selectedCustomer.name.charAt(0)}
                         </div>
                         <div>
                             <h3 className="text-xl font-bold text-gray-800">{selectedCustomer.name}</h3>
                             <div className="flex items-center gap-2 mt-1">
-                                <span className="text-gray-500 text-sm flex items-center gap-1">
-                                    <Smartphone size={14} />
-                                    {selectedCustomer.phone}
-                                </span>
-                                <span className="text-gray-300">|</span>
+                                <span className="text-gray-500 text-sm font-mono">{selectedCustomer.phone}</span>
                                 {getTypeBadge(selectedCustomer.type)}
                             </div>
                         </div>
                     </div>
-                    <button 
-                        onClick={() => setSelectedCustomer(null)}
-                        className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl transition-colors"
-                    >
+                    <button onClick={() => setSelectedCustomer(null)} className="p-2 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-xl">
                         <X size={20} />
                     </button>
                 </div>
 
-                {/* Content */}
-                <div className="p-6 overflow-y-auto space-y-8">
-                        {(() => {
-                        const { sales, repairs } = getCustomerHistory(selectedCustomer);
-                        return (
-                            <>
-                                {sales.length > 0 && (
-                                    <div className="space-y-3">
-                                        <h4 className="flex items-center gap-2 text-lg font-bold text-gray-800">
-                                            <div className="p-1.5 bg-emerald-100 text-emerald-600 rounded-lg">
-                                                <ShoppingBag size={18} />
-                                            </div>
-                                            سوابق خرید
-                                        </h4>
-                                        <div className="grid gap-3">
-                                            {sales.map(sale => (
-                                                <div key={sale.id} className="flex items-center justify-between p-4 border border-gray-100 rounded-xl hover:border-emerald-200 hover:bg-emerald-50/30 transition-all">
-                                                    <div>
-                                                        <p className="font-bold text-gray-800">{sale.product}</p>
-                                                        <p className="text-xs text-gray-500 mt-1 flex items-center gap-2">
-                                                            <CheckCircle size={12} className="text-emerald-500"/>
-                                                            گارانتی: {sale.warranty}
-                                                        </p>
-                                                    </div>
-                                                    <div className="text-left">
-                                                        <p className="font-bold text-gray-800">{sale.price.toLocaleString()} تومان</p>
-                                                        <p className="text-xs text-gray-400 mt-1 flex items-center justify-end gap-1">
-                                                            <Calendar size={12} />
-                                                            {sale.date}
-                                                        </p>
-                                                    </div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-                                )}
+                <div className="flex border-b border-gray-100 px-6">
+                    <button onClick={() => setActiveModalTab('info')} className={`py-3 px-4 text-sm font-bold border-b-2 transition-colors ${activeModalTab === 'info' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500'}`}>
+                        لیست دستگاه‌ها ({selectedCustomer.devices.length})
+                    </button>
+                    <button onClick={() => setActiveModalTab('history')} className={`py-3 px-4 text-sm font-bold border-b-2 transition-colors ${activeModalTab === 'history' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500'}`}>
+                        تاریخچه تعاملات ({customerHistory.length})
+                    </button>
+                </div>
 
-                                {repairs.length > 0 && (
-                                    <div className="space-y-3">
-                                        <h4 className="flex items-center gap-2 text-lg font-bold text-gray-800">
-                                            <div className="p-1.5 bg-blue-100 text-blue-600 rounded-lg">
-                                                <Wrench size={18} />
+                <div className="p-6 overflow-y-auto flex-1 bg-gray-50/30">
+                    {activeModalTab === 'info' && (
+                        <div className="space-y-4 animate-fadeIn">
+                            {selectedCustomer.devices.map((device, idx) => (
+                                <div key={idx} className="bg-white border border-gray-200 rounded-xl p-5 shadow-sm relative overflow-hidden group">
+                                    <div className="absolute top-0 right-0 w-1 h-full bg-indigo-500"></div>
+                                    <div className="flex justify-between items-start mb-4 pl-2">
+                                        <div className="flex items-center gap-3">
+                                            <div className="p-2.5 bg-indigo-50 text-indigo-600 rounded-xl border border-indigo-100">
+                                                <Laptop size={24} />
                                             </div>
-                                            سوابق تعمیرات
-                                        </h4>
-                                        <div className="grid gap-3">
-                                            {repairs.map(repair => (
-                                                <div key={repair.id} className="flex items-center justify-between p-4 border border-gray-100 rounded-xl hover:border-blue-200 hover:bg-blue-50/30 transition-all">
-                                                    <div>
-                                                        <p className="font-bold text-gray-800">{repair.device}</p>
-                                                        <p className="text-sm text-gray-600 mt-1">{repair.service}</p>
-                                                    </div>
-                                                    <div className="text-left">
-                                                        <span className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium mb-1 ${repair.status === 'completed' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
-                                                            {repair.status === 'completed' ? 'تکمیل شده' : 'در حال انجام'}
-                                                        </span>
-                                                        <p className="font-bold text-gray-800 text-sm">{repair.cost.toLocaleString()} تومان</p>
-                                                        <p className="text-xs text-gray-400 mt-0.5 flex items-center justify-end gap-1">
-                                                            <Calendar size={12} />
-                                                            {repair.date}
-                                                        </p>
-                                                    </div>
+                                            <div>
+                                                <h4 className="font-bold text-gray-800 text-lg">{device.brand} {device.model}</h4>
+                                                <div className="flex items-center gap-2 text-xs text-gray-500 mt-0.5">
+                                                    <span className="font-mono bg-gray-100 px-1.5 py-0.5 rounded">SN: {device.serial}</span>
+                                                    <span>•</span>
+                                                    <span>خرید: {device.receptionDate}</span>
                                                 </div>
-                                            ))}
+                                            </div>
+                                        </div>
+                                        <button 
+                                            onClick={() => handleSmsClick(device)}
+                                            className="flex items-center gap-1.5 text-xs bg-white border border-indigo-200 text-indigo-600 px-3 py-2 rounded-xl hover:bg-indigo-600 hover:text-white transition-all shadow-sm"
+                                        >
+                                            <MessageSquare size={16} />
+                                            ارسال پیامک
+                                        </button>
+                                    </div>
+
+                                    {/* Services Grid */}
+                                    <div className="grid grid-cols-2 gap-3 mb-4">
+                                        <div className="bg-gray-50 p-2.5 rounded-xl border border-gray-100 flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <Monitor size={16} className={device.hasWindows ? 'text-blue-500' : 'text-gray-400'} />
+                                                <span className="text-xs text-gray-600">نصب ویندوز:</span>
+                                            </div>
+                                            <span className={`text-xs font-bold ${device.hasWindows ? 'text-blue-600' : 'text-gray-400'}`}>
+                                                {device.hasWindows ? 'دارد' : 'خیر'}
+                                            </span>
+                                        </div>
+                                        <div className="bg-gray-50 p-2.5 rounded-xl border border-gray-100 flex items-center justify-between">
+                                            <div className="flex items-center gap-2">
+                                                <Shield size={16} className={device.antivirus !== 'غیرفعال' ? 'text-emerald-500' : 'text-gray-400'} />
+                                                <span className="text-xs text-gray-600">آنتی‌ویروس:</span>
+                                            </div>
+                                            <span className={`text-xs font-bold ${device.antivirus !== 'غیرفعال' ? 'text-emerald-600' : 'text-gray-400'}`}>
+                                                {device.antivirus}
+                                            </span>
                                         </div>
                                     </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-gray-100">
+                                        {/* Warranty */}
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex flex-col">
+                                                <span className="text-xs text-gray-500 mb-0.5">وضعیت گارانتی</span>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs font-mono font-bold text-gray-800">{device.warrantyExp || '---'}</span>
+                                                    {renderStatusBadge(getDaysRemaining(device.warrantyExp), '')}
+                                                </div>
+                                            </div>
+                                            <button onClick={() => handleRenewClick(device, 'warranty')} className="text-[10px] text-indigo-600 hover:bg-indigo-50 px-2 py-1 rounded font-bold">تمدید</button>
+                                        </div>
+
+                                        {/* Antivirus Expiry */}
+                                        <div className="flex items-center justify-between">
+                                            <div className="flex flex-col">
+                                                <span className="text-xs text-gray-500 mb-0.5">انقضای آنتی‌ویروس</span>
+                                                <div className="flex items-center gap-2">
+                                                    <span className="text-xs font-mono font-bold text-gray-800">{device.antivirusExp || '---'}</span>
+                                                    {device.antivirus !== 'غیرفعال' && renderStatusBadge(getDaysRemaining(device.antivirusExp), '')}
+                                                </div>
+                                            </div>
+                                            <button onClick={() => handleRenewClick(device, 'antivirus')} className="text-[10px] text-indigo-600 hover:bg-indigo-50 px-2 py-1 rounded font-bold">
+                                                {device.antivirus === 'غیرفعال' ? 'خرید' : 'تمدید'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+
+                    {activeModalTab === 'history' && (
+                        <div className="space-y-4 animate-fadeIn">
+                             <div className="relative border-r-2 border-gray-200 mr-2 space-y-6 pr-6">
+                                {customerHistory.length === 0 ? (
+                                    <p className="text-sm text-gray-400">هیچ سابقه‌ای یافت نشد.</p>
+                                ) : (
+                                    customerHistory.map((item, idx) => (
+                                        <div key={idx} className="relative">
+                                            <div className="absolute -right-[31px] top-0 w-4 h-4 rounded-full border-2 border-white bg-gray-300 ring-2 ring-gray-100"></div>
+                                            <div className="bg-white rounded-xl p-3 border border-gray-100 shadow-sm">
+                                                <div className="flex justify-between items-start mb-1">
+                                                    <span className="text-xs font-bold text-gray-700">{item.title}</span>
+                                                    <span className="text-[10px] text-gray-400 font-mono">{item.date}</span>
+                                                </div>
+                                                <p className="text-xs text-gray-600 leading-relaxed">{item.details}</p>
+                                                {item.cost && <p className="text-xs font-bold text-gray-800 mt-2">{item.cost.toLocaleString()} تومان</p>}
+                                            </div>
+                                        </div>
+                                    ))
                                 )}
-                            </>
-                        );
-                        })()}
+                             </div>
+                        </div>
+                    )}
                 </div>
                 
-                {/* Footer */}
                 <div className="p-4 border-t border-gray-100 bg-gray-50 flex justify-between items-center">
                     <div className="flex flex-col">
-                        <span className="text-xs text-gray-500">مجموع پرداختی</span>
+                        <span className="text-xs text-gray-500">مجموع هزینه کل</span>
                         <span className="text-lg font-bold text-gray-800">{selectedCustomer.totalSpent.toLocaleString()} تومان</span>
                     </div>
-                    <button 
-                        onClick={() => setSelectedCustomer(null)}
-                        className="px-6 py-2 bg-gray-800 text-white rounded-xl hover:bg-gray-700 transition-colors text-sm font-medium"
-                    >
-                        بستن
-                    </button>
+                    <button onClick={() => setSelectedCustomer(null)} className="px-6 py-2 bg-gray-800 text-white rounded-xl hover:bg-gray-700 transition-colors text-sm font-medium">بستن</button>
                 </div>
             </div>
         </div>
         )}
 
-        {/* Smart SMS Modal */}
-        {isSmsModalOpen && (
-            <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/20 backdrop-blur-sm animate-fadeIn">
-                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-lg overflow-hidden flex flex-col">
-                    <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50/50">
-                        <div className="flex items-center gap-3">
-                            <div className="p-2 bg-indigo-100 text-indigo-600 rounded-lg">
-                                <Zap size={20} />
-                            </div>
-                            <h3 className="text-lg font-bold text-gray-800">پنل ارسال پیامک هوشمند</h3>
-                        </div>
-                        <button onClick={() => setIsSmsModalOpen(false)} className="text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg p-1 transition-colors">
-                            <X size={20} />
-                        </button>
+        {/* Renewal Modal */}
+        {isRenewModalOpen && targetDevice && (
+             <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fadeIn">
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col">
+                    <div className="p-4 border-b border-gray-100 bg-indigo-50/50">
+                        <h3 className="font-bold text-gray-800 text-sm">تمدید {renewTarget === 'warranty' ? 'گارانتی' : 'آنتی‌ویروس'}</h3>
+                        <p className="text-xs text-gray-500 mt-1">{targetDevice.brand} {targetDevice.model}</p>
                     </div>
-
-                    <div className="p-6 space-y-6">
-                        {/* Step 1: Filter */}
-                        <div className="space-y-2">
-                            <label className="text-sm font-medium text-gray-700">هدف کمپین (فیلتر مخاطبین)</label>
-                            <div className="grid grid-cols-2 gap-3">
-                                <button 
-                                    onClick={() => setSmsFilter('warranty_expiring')}
-                                    className={`p-3 rounded-xl border text-sm font-medium flex flex-col items-center justify-center gap-2 transition-all ${smsFilter === 'warranty_expiring' ? 'bg-amber-50 border-amber-200 text-amber-700 ring-2 ring-amber-100' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-                                >
-                                    <ShieldAlert size={20} />
-                                    انقضای گارانتی
-                                </button>
-                                <button 
-                                    onClick={() => setSmsFilter('antivirus_renewal')}
-                                    className={`p-3 rounded-xl border text-sm font-medium flex flex-col items-center justify-center gap-2 transition-all ${smsFilter === 'antivirus_renewal' ? 'bg-emerald-50 border-emerald-200 text-emerald-700 ring-2 ring-emerald-100' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-                                >
-                                    <CheckCircle size={20} />
-                                    تمدید آنتی‌ویروس
-                                </button>
-                                <button 
-                                    onClick={() => setSmsFilter('periodic_service')}
-                                    className={`p-3 rounded-xl border text-sm font-medium flex flex-col items-center justify-center gap-2 transition-all ${smsFilter === 'periodic_service' ? 'bg-blue-50 border-blue-200 text-blue-700 ring-2 ring-blue-100' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-                                >
-                                    <Clock size={20} />
-                                    سرویس دوره‌ای
-                                </button>
-                                <button 
-                                    onClick={() => setSmsFilter('all')}
-                                    className={`p-3 rounded-xl border text-sm font-medium flex flex-col items-center justify-center gap-2 transition-all ${smsFilter === 'all' ? 'bg-gray-800 text-white border-gray-800' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}
-                                >
-                                    <UserCheck size={20} />
-                                    همه مشتریان
-                                </button>
-                            </div>
-                            <p className="text-xs text-indigo-600 mt-2 flex items-center gap-1 bg-indigo-50 p-2 rounded-lg inline-block">
-                                <UserCheck size={12} />
-                                تعداد مخاطبین یافت شده: <b>{targetCount} نفر</b>
-                            </p>
+                    <div className="p-6 space-y-4">
+                        <div className="grid grid-cols-3 gap-3">
+                             {[6, 12, 24].map(m => (
+                                 <button key={m} onClick={() => setRenewDuration(m)} className={`p-3 rounded-xl border text-sm font-medium flex flex-col items-center gap-1 transition-all ${renewDuration === m ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white border-gray-200 text-gray-600'}`}>
+                                    <span className="font-bold text-lg">{m === 12 ? '1' : m === 24 ? '2' : '6'}</span>
+                                    <span className="text-xs opacity-80">{m >= 12 ? 'سال' : 'ماه'}</span>
+                                 </button>
+                             ))}
                         </div>
-
-                        {/* Step 2: Message */}
-                        <div className="space-y-2">
-                             <div className="flex justify-between items-center">
-                                <label className="text-sm font-medium text-gray-700">متن پیامک</label>
-                                <span className="text-xs text-gray-400">{smsMessage.length} / 160 کاراکتر</span>
-                             </div>
-                             <textarea 
-                                value={smsMessage}
-                                onChange={(e) => setSmsMessage(e.target.value)}
-                                rows={4}
-                                className="w-full px-4 py-3 bg-gray-50 border border-gray-200 rounded-xl focus:bg-white focus:ring-2 focus:ring-indigo-100 focus:border-indigo-400 transition-all outline-none resize-none text-sm leading-relaxed"
-                             />
-                             <div className="flex flex-wrap gap-2">
-                                <span className="text-xs text-gray-500">متغیرهای هوشمند:</span>
-                                {['{نام_مشتری}', '{شماره_فاکتور}', '{نام_دستگاه}'].map(tag => (
-                                    <button 
-                                        key={tag}
-                                        onClick={() => setSmsMessage(prev => prev + ' ' + tag)}
-                                        className="px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded-lg text-xs text-gray-600 transition-colors"
-                                    >
-                                        {tag}
-                                    </button>
-                                ))}
-                             </div>
-                        </div>
-                    </div>
-
-                    <div className="p-4 border-t border-gray-100 flex justify-end gap-3 bg-gray-50">
-                        <button 
-                            onClick={() => setIsSmsModalOpen(false)}
-                            className="px-5 py-2.5 text-gray-600 hover:bg-gray-200 font-medium rounded-xl transition-colors"
-                        >
-                            انصراف
+                        <button onClick={handleConfirmRenew} className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl transition-all">
+                            تایید و ثبت
                         </button>
-                        <button 
-                            onClick={handleSendSms}
-                            disabled={isSendingSms || targetCount === 0}
-                            className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-lg shadow-indigo-200 transition-all flex items-center gap-2 disabled:opacity-70 disabled:cursor-not-allowed"
-                        >
-                            {isSendingSms ? <Loader2 size={18} className="animate-spin" /> : <Send size={18} />}
-                            <span>ارسال به {targetCount} نفر</span>
-                        </button>
+                        <button onClick={() => setIsRenewModalOpen(false)} className="w-full py-2 text-gray-500 text-xs">انصراف</button>
                     </div>
                 </div>
-            </div>
+             </div>
+        )}
+
+        {/* SMS Modal */}
+        {isSmsModalOpen && targetDevice && (
+             <div className="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/40 backdrop-blur-sm animate-fadeIn">
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm overflow-hidden flex flex-col">
+                    <div className="p-4 border-b border-gray-100 bg-indigo-50/50">
+                        <h3 className="font-bold text-gray-800 text-sm flex items-center gap-2"><MessageSquare size={16}/> ارسال پیامک</h3>
+                        <p className="text-xs text-gray-500 mt-1">به: {targetDevice.brand} {targetDevice.model}</p>
+                    </div>
+                    <div className="p-5 space-y-4">
+                        <textarea 
+                            value={smsText}
+                            onChange={(e) => setSmsText(e.target.value)}
+                            rows={4}
+                            className="w-full p-3 border border-gray-200 rounded-xl text-sm outline-none focus:border-indigo-500"
+                        ></textarea>
+                        <button onClick={handleSendDeviceSms} className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl flex items-center justify-center gap-2">
+                            <Send size={16} /> ارسال پیام
+                        </button>
+                        <button onClick={() => setIsSmsModalOpen(false)} className="w-full py-2 text-gray-500 text-xs">انصراف</button>
+                    </div>
+                </div>
+             </div>
         )}
     </div>
   );

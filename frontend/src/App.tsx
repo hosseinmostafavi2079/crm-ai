@@ -1,14 +1,14 @@
 import React, { useState } from 'react';
 import { HashRouter, Routes, Route, Navigate, Outlet } from 'react-router-dom';
-import Login from './frontend/src/pages/Login';
-import Dashboard from './frontend/src/pages/Dashboard';
-import Repairs from './frontend/src/pages/Repairs';
-import Sales from './frontend/src/pages/Sales';
-import Customers from './frontend/src/pages/Customers';
-import Settings from './frontend/src/pages/Settings';
-import Messages from './frontend/src/pages/Messages'; // New Import
-import CustomerPortal from './frontend/src/pages/CustomerPortal';
-import Layout from './frontend/src/components/Layout';
+import Login from './pages/Login';
+import Dashboard from './pages/Dashboard';
+import Repairs from './pages/Repairs';
+import Sales from './pages/Sales';
+import Customers from './pages/Customers';
+import Settings from './pages/Settings';
+import Messages from './pages/Messages'; 
+import CustomerPortal from './pages/CustomerPortal';
+import Layout from './components/Layout';
 
 const App: React.FC = () => {
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -23,6 +23,7 @@ const App: React.FC = () => {
     setIsAuthenticated(false);
     setUserRole(null);
     localStorage.removeItem('access_token'); 
+    localStorage.removeItem('refresh_token'); 
   };
 
   // Protected Route Wrapper for Admin
